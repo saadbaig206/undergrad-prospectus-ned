@@ -1,0 +1,26 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# Output files / build directories
+output_chunks/
+temp_*.pdf
+temp_chunk_*.pdf
+extracted_content.md
+frontend/static/seat_distribution.pdf
+seat_distribution.pdf
+
+# IDEs
+.vscode/
+.idea/
+.gemini/
