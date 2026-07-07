@@ -8,7 +8,7 @@
   ],
   "functions": {
     "api/index.py": {
-      "includeFiles": "seat_distribution.pdf"
+      "includeFiles": "public/seat_distribution.pdf"
     }
   }
 }

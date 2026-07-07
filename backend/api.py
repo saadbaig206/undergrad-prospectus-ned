@@ -316,10 +316,13 @@ from fastapi.responses import FileResponse
 def get_seat_distribution():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     static_seat_path = os.path.join(base_dir, "frontend", "static", "seat_distribution.pdf")
+    public_seat_path = os.path.join(base_dir, "public", "seat_distribution.pdf")
     root_seat_path = os.path.join(base_dir, "seat_distribution.pdf")
     
     if os.path.exists(static_seat_path):
         return FileResponse(static_seat_path, media_type="application/pdf", filename="seat_distribution.pdf")
+    elif os.path.exists(public_seat_path):
+        return FileResponse(public_seat_path, media_type="application/pdf", filename="seat_distribution.pdf")
     elif os.path.exists(root_seat_path):
         return FileResponse(root_seat_path, media_type="application/pdf", filename="seat_distribution.pdf")
     else:
