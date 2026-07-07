@@ -45,18 +45,6 @@ def root():
 def health_check():
     return {"status": "ok"}
 
-@app.get("/list_files")
-def list_files():
-    import os
-    res = []
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for root, dirs, files in os.walk(base):
-        for f in files:
-            path = os.path.relpath(os.path.join(root, f), base)
-            if "venv" not in path and ".git" not in path and "__pycache__" not in path:
-                res.append(path)
-    return {"base": base, "files": res}
-
 # Password utility functions
 def hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
@@ -326,6 +314,27 @@ from fastapi.responses import FileResponse
 
 @app.get("/seat_distribution.pdf")
 def get_seat_distribution():
+    # If Supabase URL is configured, retrieve the PDF dynamically from Supabase Storage
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
+    
+    if supabase_url:
+        try:
+            import requests
+            supabase_url = supabase_url.rstrip("/")
+            pdf_url = f"{supabase_url}/storage/v1/object/public/{supabase_bucket}/seat_distribution.pdf"
+            resp = requests.get(pdf_url, timeout=10)
+            if resp.status_code == 200:
+                from fastapi.responses import Response
+                return Response(
+                    content=resp.content,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": "attachment; filename=\"seat_distribution.pdf\""}
+                )
+        except Exception as e:
+            print(f"Failed to fetch PDF from Supabase: {e}")
+
+    # Local development fallback
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     static_seat_path = os.path.join(base_dir, "frontend", "static", "seat_distribution.pdf")
     public_seat_path = os.path.join(base_dir, "public", "seat_distribution.pdf")
