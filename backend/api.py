@@ -314,8 +314,9 @@ from fastapi.responses import FileResponse
 
 @app.get("/seat_distribution.pdf")
 def get_seat_distribution():
-    static_seat_path = "frontend/static/seat_distribution.pdf"
-    root_seat_path = "seat_distribution.pdf"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    static_seat_path = os.path.join(base_dir, "frontend", "static", "seat_distribution.pdf")
+    root_seat_path = os.path.join(base_dir, "seat_distribution.pdf")
     
     if os.path.exists(static_seat_path):
         return FileResponse(static_seat_path, media_type="application/pdf", filename="seat_distribution.pdf")
