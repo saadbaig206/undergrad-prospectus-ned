@@ -17,8 +17,8 @@ output_chunks/
 temp_*.pdf
 temp_chunk_*.pdf
 extracted_content.md
-frontend/static/seat_distribution.pdf
-seat_distribution.pdf
+/frontend/static/seat_distribution.pdf
+/seat_distribution.pdf
 
 # IDEs
 .vscode/
