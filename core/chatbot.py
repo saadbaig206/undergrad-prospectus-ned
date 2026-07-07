@@ -35,7 +35,10 @@ API_BASE_URL = os.getenv(
     "API_BASE_URL",
     "http://localhost:8000"
 ).rstrip("/")
-SEAT_DIST_FILE_LINK = f"{API_BASE_URL}/seat_distribution.pdf"
+SEAT_DIST_FILE_LINK = os.getenv(
+    "SEAT_DIST_FILE_LINK",
+    f"{API_BASE_URL}/seat_distribution.pdf"
+)
 
 groq_client = None
 langchain_llm = None

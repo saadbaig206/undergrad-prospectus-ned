@@ -1,6 +1,6 @@
 # 🎓 University UG Prospectus RAG Chatbot
 
-An AI-powered Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate Prospectuses. Built with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **Streamlit glassmorphism frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, and **Groq LLMs**.
+An AI-powered Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate Prospectuses. Built with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **Streamlit glassmorphism frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, **Model2Vec (minishlab/potion-base-8M)** local embeddings, and **Groq LLMs**.
 
 ---
 
@@ -21,7 +21,8 @@ graph TD
     subgraph Data [Data & AI Services]
         Neon[(Neon Postgres DB)]
         Pinecone[(Pinecone Vector DB)]
-        Groq[Groq Llama-3.1 / 3.3]
+        Groq[Groq Llama-3.1 8B / 70B]
+        Model2Vec[Model2Vec Potion-8M]
         LlamaParse[LlamaParse Cloud API]
     end
 
@@ -33,16 +34,19 @@ graph TD
     Auth -->|2. Verify Credentials & Session| Neon
     
     %% Query Flow
-    API -->|3. Query Vector Embeddings| Pinecone
-    API -->|4. Context-enriched Prompt| Groq
-    Groq -->|5. Structured Answer| API
-    API -->|6. JSON Response| UI
+    API -->|3. Get Potion-8M Embeddings| Model2Vec
+    API -->|4. Query Vector Embeddings| Pinecone
+    API -->|5. Context-enrich Prompt| Groq
+    Groq -->|6. Structured Answer| API
+    API -->|7. JSON Response| UI
 
     %% Admin Ingestion Flow
     UI -->|Admin Upload PDF & Pages| API
     API -->|Trigger Ingestion| Ingest
     Ingest -->|Slice Excluded Pages| LlamaParse
     LlamaParse -->|Parsed Text Chunks| Ingest
+    Ingest -->|Split into Overlapping Chunks| Ingest
+    Ingest -->|Batch Embed via Model2Vec| Model2Vec
     Ingest -->|Upsert Chunks| Pinecone
 ```
 
@@ -55,7 +59,7 @@ workspace/
 ├── backend/
 │   ├── __init__.py
 │   ├── api.py           # FastAPI routes, auth middleware, and background workers
-│   ├── database.py      # Neon Postgres connection & schema initializer
+│   ├── database.py      # Neon Postgres connection, schema init, & connection validator
 │   └── schemas.py       # Pydantic validation request/response objects
 ├── frontend/
 │   ├── __init__.py
@@ -63,10 +67,13 @@ workspace/
 ├── core/
 │   ├── __init__.py
 │   ├── chatbot.py       # Core RAG querying engine (Groq model + Pinecone lookup)
-│   ├── main.py          # Parallel page-by-page PDF extraction and index uploader
+│   ├── main.py          # Parallel page-by-page PDF extraction, text splitting, & vector indexing
 │   └── admin_process.py # PDF processing operations, layout splits & OCR fallbacks
-├── static/
-│   └── seat_distribution.pdf  # Extracted seat matrix pages (served to browser)
+├── public/
+│   └── seat_distribution.pdf  # Extracted seat matrix pages (served via Vercel Edge CDN)
+├── api/
+│   └── index.py         # Vercel Serverless Function entrypoint (with root path resolver)
+├── vercel.json          # Vercel deployment routing & rewrite configurations
 ├── .env                 # API Keys and database configuration
 ├── requirements.txt     # Virtual environment dependencies
 └── UGProspectus2025.pdf # Main prospectus source document
@@ -101,6 +108,12 @@ LLAMA_CLOUD_API_KEY="your-llama-cloud-api-key"
 
 # LLM Inference API (Groq)
 GROQ_API_KEY="your-groq-api-key"
+
+# External Cloud PDF Storage (Optional: Supabase)
+SUPABASE_URL="https://your-project-id.supabase.co"
+SUPABASE_KEY="your-supabase-service-role-key"
+SUPABASE_BUCKET="assets"
+SEAT_DIST_FILE_LINK="https://your-project-id.supabase.co/storage/v1/object/public/assets/seat_distribution.pdf"
 ```
 
 ---
@@ -137,3 +150,28 @@ Access the UI in your browser at **[http://localhost:8501](http://localhost:8501
 | **POST** | `/admin/create-admin` | `ADMIN` Only | Create another user with `ADMIN` privileges. |
 | **POST** | `/admin/upload-prospectus` | `ADMIN` Only | Upload a new prospectus, save locally, update page splits, and run background re-indexing. |
 | **POST** | `/user/query` | Authenticated | Query RAG engine and retrieve structured answers from Pinecone index. |
+| **GET** | `/seat_distribution.pdf` | Public | Download the compiled seat distribution PDF (served from Vercel Edge CDN in production). |
+
+---
+
+## 🌐 Vercel Backend Deployment
+
+To deploy the FastAPI backend on Vercel:
+
+### 1. Configure Vercel Project
+Create a project on Vercel and link it to your GitHub repository.
+
+### 2. Configure Environment Variables
+In your Vercel project dashboard, navigate to **Settings > Environment Variables** and add the following keys:
+- `DATABASE_URL`: Your Neon PostgreSQL connection string.
+- `PINECONE_API_KEY`: Your Pinecone credentials.
+- `GROQ_API_KEY`: Your Groq API key.
+
+### 3. Deploy
+Push your commits to your `main` branch on GitHub to trigger automatic Vercel builds:
+```bash
+git add .
+git commit -m "Deploy to Vercel"
+git push origin main
+```
+Once built, the API and PDF download link will be served globally at your Vercel deployment domain.
