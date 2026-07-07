@@ -258,8 +258,10 @@ def upload_prospectus(
                 seat_doc.insert_pdf(doc, from_page=zero_based_p, to_page=zero_based_p)
                 
         os.makedirs("frontend/static", exist_ok=True)
+        os.makedirs("public", exist_ok=True)
         static_seat_path = "frontend/static/seat_distribution.pdf"
         root_seat_path = "seat_distribution.pdf"
+        public_seat_path = "public/seat_distribution.pdf"
         
         seat_doc.save(static_seat_path)
         seat_doc.close()
@@ -267,7 +269,36 @@ def upload_prospectus(
         
         import shutil
         shutil.copy(static_seat_path, root_seat_path)
-        print("Regenerated seat_distribution.pdf with new page exclusions.")
+        shutil.copy(static_seat_path, public_seat_path)
+        print("Regenerated seat_distribution.pdf locally and in public assets.")
+        
+        # Upload to Supabase Storage if configured
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
+        
+        if supabase_url and supabase_key:
+            try:
+                import requests
+                supabase_url = supabase_url.rstrip("/")
+                upload_url = f"{supabase_url}/storage/v1/object/{supabase_bucket}/seat_distribution.pdf"
+                
+                headers = {
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/pdf",
+                    "x-upsert": "true"
+                }
+                
+                with open(static_seat_path, "rb") as f:
+                    file_data = f.read()
+                    
+                resp = requests.post(upload_url, headers=headers, data=file_data)
+                if resp.status_code in (200, 201):
+                    print("Successfully uploaded and overwrote seat_distribution.pdf in Supabase Storage!")
+                else:
+                    print(f"Supabase upload failed with status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                print(f"Failed to upload seat distribution PDF to Supabase: {e}")
     except Exception as e:
         print(f"Error regenerating seat distribution PDF: {e}")
         
