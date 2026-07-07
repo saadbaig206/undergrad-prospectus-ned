@@ -189,19 +189,18 @@ if app_mode == "💬 Chatbot Interface":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant" and "Seat Distribution Matrix" in message["content"]:
-                pdf_path = "frontend/static/seat_distribution.pdf"
-                if not os.path.exists(pdf_path):
-                    pdf_path = "seat_distribution.pdf"
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-                    st.download_button(
-                        label="📥 Download Seat Distribution PDF",
-                        data=pdf_bytes,
-                        file_name="seat_distribution.pdf",
-                        mime="application/pdf",
-                        key=f"download_{i}"
-                    )
+                try:
+                    resp = requests.get(f"{API_URL}/seat_distribution.pdf", timeout=10)
+                    if resp.status_code == 200:
+                        st.download_button(
+                            label="📥 Download Seat Distribution PDF",
+                            data=resp.content,
+                            file_name="seat_distribution.pdf",
+                            mime="application/pdf",
+                            key=f"download_{i}"
+                        )
+                except Exception as e:
+                    print(f"Error fetching PDF from backend: {e}")
 
     # Handle pending assistant response (streaming)
     if st.session_state.get("pending_query"):
