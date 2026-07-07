@@ -8,11 +8,7 @@
   ],
   "rewrites": [
     {
-      "source": "/seat_distribution.pdf",
-      "destination": "/public/seat_distribution.pdf"
-    },
-    {
-      "source": "/(.*)",
+      "source": "/((?!seat_distribution\\.pdf).*)",
       "destination": "/api/index.py"
     }
   ]
