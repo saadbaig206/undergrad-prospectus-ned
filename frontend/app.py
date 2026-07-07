@@ -62,6 +62,25 @@ div[data-testid="stChatInput"] {
     border-radius: 12px !important;
 }
 
+/* Chat input sticky container glassmorphic background */
+div[data-testid="stBottom"] {
+    background: transparent !important;
+}
+
+div[data-testid="stBottom"] > div {
+    background: rgba(15, 23, 42, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
+    padding: 10px 20px 20px 20px !important;
+}
+
+/* Style input area itself */
+textarea[data-testid="stChatInputTextArea"] {
+    background-color: rgba(30, 41, 59, 0.5) !important;
+    color: #f8fafc !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
 /* Form styling */
 div[data-testid="stForm"] {
     background: rgba(30, 41, 59, 0.3);
@@ -91,6 +110,7 @@ if "session_token" not in st.session_state:
     st.session_state.role = None
     st.session_state.username = None
     st.session_state.messages = []
+    st.session_state.pending_query = None
 
 # --- 1. Authentication View ---
 if st.session_state.session_token is None:
@@ -137,31 +157,33 @@ if st.session_state.session_token is None:
 
 # --- 2. Main Interface ---
 
-# Sidebar User Panel
+# Sidebar User Panel & Navigation
 with st.sidebar:
     st.markdown(f"### Signed in as **{st.session_state.username}**")
     st.markdown(f"Role: `{st.session_state.role}`")
     st.markdown("---")
     
+    if st.session_state.role == "ADMIN":
+        st.markdown("### Navigation")
+        app_mode = st.radio(
+            "Go to",
+            ["💬 Chatbot Interface", "📤 Ingest New Prospectus", "🔑 Create New Admin"],
+            index=0
+        )
+        st.markdown("---")
+    else:
+        app_mode = "💬 Chatbot Interface"
+        
     if st.button("Logout", use_container_width=True):
         st.session_state.session_token = None
         st.session_state.role = None
         st.session_state.username = None
         st.session_state.messages = []
-        if hasattr(st, "rerun"):
-            st.rerun()
-        else:
-            st.experimental_rerun()
+        st.session_state.pending_query = None
+        st.rerun()
 
-# Role-Based Views
-if st.session_state.role == "ADMIN":
-    tab1, tab2, tab3 = st.tabs(["💬 Chatbot Interface", "📤 Ingest New Prospectus", "🔑 Create New Admin"])
-else:
-    # Users only see the Chatbot
-    tab1 = st.container()
-
-# Tab 1: Chatbot Interface (Both ADMIN and USER)
-with tab1:
+# Render View Based on Navigation selection
+if app_mode == "💬 Chatbot Interface":
     # Display conversation history
     for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
@@ -181,108 +203,125 @@ with tab1:
                         key=f"download_{i}"
                     )
 
-    # Chat input box
+    # Handle pending assistant response (streaming)
+    if st.session_state.get("pending_query"):
+        query = st.session_state.pending_query
+        st.session_state.pending_query = None
+        
+        with st.chat_message("assistant"):
+            try:
+                headers = {"Authorization": f"Bearer {st.session_state.session_token}"}
+                # History is everything before the last user query (which was already appended)
+                history_payload = st.session_state.messages[:-1]
+                resp = requests.post(
+                    f"{API_URL}/user/query", 
+                    json={"query": query, "history": history_payload}, 
+                    headers=headers,
+                    stream=True
+                )
+                if resp.status_code == 200:
+                    resp.encoding = resp.encoding or "utf-8"
+
+                    def get_stream():
+                        for chunk in resp.iter_content(chunk_size=1, decode_unicode=True):
+                            if chunk:
+                                yield chunk
+                                
+                    answer = st.write_stream(get_stream())
+                else:
+                    try:
+                        detail = resp.json().get('detail', 'Unknown server error')
+                    except Exception:
+                        detail = resp.text or 'Unknown server error'
+                    answer = f"⚠️ **Error:** {detail}"
+                    st.markdown(answer)
+            except Exception as e:
+                answer = f"⚠️ **Connection Error:** {e}"
+                st.markdown(answer)
+
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.rerun()
+
+    # Chat input box (At root page level, so Streamlit pins it to the bottom of the viewport)
     question = st.chat_input("Ask a question about courses, eligibility, or admissions...")
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
+        st.session_state.pending_query = question
+        st.rerun()
 
-        with st.spinner("Analyzing prospectus..."):
-            try:
-                headers = {"Authorization": f"Bearer {st.session_state.session_token}"}
-                resp = requests.post(
-                    f"{API_URL}/user/query", 
-                    json={"query": question}, 
-                    headers=headers
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    answer = data["answer"]
-                else:
-                    answer = f"⚠️ **Error:** {resp.json().get('detail', 'Unknown server error')}"
-            except Exception as e:
-                answer = f"⚠️ **Connection Error:** {e}"
+    # JS helper to auto-scroll chat to the bottom on rerun / query completion
+    st.iframe(
+        """
+        <script>
+            setTimeout(function() {
+                var scrollContainer = window.parent.document.querySelector('.main');
+                if (scrollContainer) {
+                    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                }
+            }, 100);
+        </script>
+        """,
+        height=1,
+        width=1
+    )
 
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-        with st.chat_message("assistant"):
-            st.markdown(answer)
-            if "Seat Distribution Matrix" in answer:
-                pdf_path = "frontend/static/seat_distribution.pdf"
-                if not os.path.exists(pdf_path):
-                    pdf_path = "seat_distribution.pdf"
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-                    st.download_button(
-                        label="📥 Download Seat Distribution PDF",
-                        data=pdf_bytes,
-                        file_name="seat_distribution.pdf",
-                        mime="application/pdf",
-                        key=f"download_{len(st.session_state.messages)-1}"
+elif app_mode == "📤 Ingest New Prospectus":
+    st.markdown("### Upload & Process New Prospectus")
+    st.write("Upload a new PDF prospectus. You can specify which 0-based pages contain seat distribution matrices to split them from RAG parsing.")
+    
+    uploaded_file = st.file_uploader("Select Prospectus PDF", type=["pdf"])
+    ex_pages = st.text_input("Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)", "79,80,81")
+    
+    if st.button("Upload & Start Processing", use_container_width=True):
+        if not uploaded_file:
+            st.error("Please select a PDF file first.")
+        else:
+            with st.spinner("Uploading file and initiating processing pipeline..."):
+                try:
+                    headers = {"Authorization": f"Bearer {st.session_state.session_token}"}
+                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
+                    data = {"excluded_pages": ex_pages}
+                    
+                    resp = requests.post(
+                        f"{API_URL}/admin/upload-prospectus", 
+                        files=files, 
+                        data=data, 
+                        headers=headers
                     )
+                    
+                    if resp.status_code == 200:
+                        res = resp.json()
+                        st.success(res["message"])
+                        st.info(f"Page Exclusions Applied: {res['excluded_pages_applied']}")
+                    else:
+                        st.error(f"Failed to process upload: {resp.json().get('detail', 'Unknown error')}")
+                except Exception as e:
+                    st.error(f"Connection Error: {e}")
 
-# Tab 2 & 3: Admin Actions (ADMIN only)
-if st.session_state.role == "ADMIN":
-    # Tab 2: Ingest New Prospectus
-    with tab2:
-        st.markdown("### Upload & Process New Prospectus")
-        st.write("Upload a new PDF prospectus. You can specify which 0-based pages contain seat distribution matrices to split them from RAG parsing.")
+elif app_mode == "🔑 Create New Admin":
+    st.markdown("### Register a New Administrator")
+    st.write("Create a new user profile with full administrative permissions.")
+    
+    with st.form("create_admin_form"):
+        new_admin_username = st.text_input("New Admin Username").strip()
+        new_admin_password = st.text_input("New Admin Password", type="password")
+        create_submitted = st.form_submit_button("Register Admin User")
         
-        uploaded_file = st.file_uploader("Select Prospectus PDF", type=["pdf"])
-        ex_pages = st.text_input("Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)", "79,80,81")
-        
-        if st.button("Upload & Start Processing", use_container_width=True):
-            if not uploaded_file:
-                st.error("Please select a PDF file first.")
+        if create_submitted:
+            if not new_admin_username or not new_admin_password:
+                st.error("Both username and password are required")
             else:
-                with st.spinner("Uploading file and initiating processing pipeline..."):
+                with st.spinner("Registering admin..."):
                     try:
                         headers = {"Authorization": f"Bearer {st.session_state.session_token}"}
-                        files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                        data = {"excluded_pages": ex_pages}
-                        
                         resp = requests.post(
-                            f"{API_URL}/admin/upload-prospectus", 
-                            files=files, 
-                            data=data, 
+                            f"{API_URL}/admin/create-admin",
+                            json={"username": new_admin_username, "password": new_admin_password},
                             headers=headers
                         )
-                        
                         if resp.status_code == 200:
-                            res = resp.json()
-                            st.success(res["message"])
-                            st.info(f"Page Exclusions Applied: {res['excluded_pages_applied']}")
+                            st.success(resp.json()["message"])
                         else:
-                            st.error(f"Failed to process upload: {resp.json().get('detail', 'Unknown error')}")
+                            st.error(f"Failed to register admin: {resp.json().get('detail', 'Unknown error')}")
                     except Exception as e:
                         st.error(f"Connection Error: {e}")
-
-    # Tab 3: Create New Admin
-    with tab3:
-        st.markdown("### Register a New Administrator")
-        st.write("Create a new user profile with full administrative permissions.")
-        
-        with st.form("create_admin_form"):
-            new_admin_username = st.text_input("New Admin Username").strip()
-            new_admin_password = st.text_input("New Admin Password", type="password")
-            create_submitted = st.form_submit_button("Register Admin User")
-            
-            if create_submitted:
-                if not new_admin_username or not new_admin_password:
-                    st.error("Both username and password are required")
-                else:
-                    with st.spinner("Registering admin..."):
-                        try:
-                            headers = {"Authorization": f"Bearer {st.session_state.session_token}"}
-                            resp = requests.post(
-                                f"{API_URL}/admin/create-admin",
-                                json={"username": new_admin_username, "password": new_admin_password},
-                                headers=headers
-                            )
-                            if resp.status_code == 200:
-                                st.success(resp.json()["message"])
-                            else:
-                                st.error(f"Failed to register admin: {resp.json().get('detail', 'Unknown error')}")
-                        except Exception as e:
-                            st.error(f"Connection Error: {e}")

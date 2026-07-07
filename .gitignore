@@ -24,3 +24,6 @@ seat_distribution.pdf
 .vscode/
 .idea/
 .gemini/
+
+.vercel
+.env*

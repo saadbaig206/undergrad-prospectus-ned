@@ -13,9 +13,8 @@ load_dotenv()
 from backend.database import get_db_connection, init_db
 from backend.schemas import AuthRequest, QueryRequest, CreateAdminRequest
 
-from core.chatbot import is_seat_distribution_query, get_rag_response, SEAT_DIST_FILE_LINK
-from core.main import run_parallel_pipeline
-from core.admin_process import EXCLUDED_PAGES
+from core.chatbot import route_chat_stream
+from fastapi.responses import StreamingResponse
 
 app = FastAPI(title="UG Prospectus Chatbot API", version="1.0.0")
 
@@ -29,7 +28,22 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:
+        print(f"Database initialization skipped or failed: {exc}")
+
+@app.get("/")
+def root():
+    return {
+        "message": "UG Prospectus Chatbot API is running",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 # Password utility functions
 def hash_password(password: str, salt: str) -> str:
@@ -77,29 +91,31 @@ def signup(payload: AuthRequest):
     conn = get_db_connection()
     cur = conn.cursor()
     
-    cur.execute("SELECT id FROM users WHERE username = %s;", (payload.username.strip(),))
-    if cur.fetchone():
-        cur.close()
-        conn.close()
-        raise HTTPException(status_code=400, detail="Username already exists")
-        
     salt = secrets.token_hex(16)
     p_hash = hash_password(payload.password, salt)
     
     try:
         cur.execute(
-            "INSERT INTO users (username, password_hash, salt, role) VALUES (%s, %s, %s, 'USER');",
+            """
+            INSERT INTO users (username, password_hash, salt, role)
+            VALUES (%s, %s, %s, 'USER')
+            ON CONFLICT (username) DO NOTHING
+            RETURNING id;
+            """,
             (payload.username.strip(), p_hash, salt)
         )
-        conn.commit()
+        res = cur.fetchone()
     except Exception as e:
-        conn.rollback()
         cur.close()
         conn.close()
         raise HTTPException(status_code=500, detail=f"Signup database error: {e}")
         
     cur.close()
     conn.close()
+    
+    if not res:
+        raise HTTPException(status_code=400, detail="Username already exists")
+        
     return {"message": "User registered successfully"}
 
 @app.post("/auth/login")
@@ -107,8 +123,14 @@ def login(payload: AuthRequest):
     from psycopg2.extras import RealDictCursor
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM users WHERE username = %s;", (payload.username.strip(),))
-    user = cur.fetchone()
+    
+    try:
+        cur.execute("SELECT * FROM users WHERE username = %s;", (payload.username.strip(),))
+        user = cur.fetchone()
+    except Exception as e:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Login database query error: {e}")
     
     if not user:
         cur.close()
@@ -129,9 +151,7 @@ def login(payload: AuthRequest):
             "INSERT INTO sessions (token, user_id, expires_at) VALUES (%s, %s, %s);",
             (token, user['id'], expires_at)
         )
-        conn.commit()
     except Exception as e:
-        conn.rollback()
         cur.close()
         conn.close()
         raise HTTPException(status_code=500, detail=f"Session creation error: {e}")
@@ -150,33 +170,37 @@ def create_admin(payload: CreateAdminRequest, admin_user = Depends(get_current_a
     conn = get_db_connection()
     cur = conn.cursor()
     
-    cur.execute("SELECT id FROM users WHERE username = %s;", (payload.username.strip(),))
-    if cur.fetchone():
-        cur.close()
-        conn.close()
-        raise HTTPException(status_code=400, detail="Username already exists")
-        
     salt = secrets.token_hex(16)
     p_hash = hash_password(payload.password, salt)
     
     try:
         cur.execute(
-            "INSERT INTO users (username, password_hash, salt, role) VALUES (%s, %s, %s, 'ADMIN');",
+            """
+            INSERT INTO users (username, password_hash, salt, role)
+            VALUES (%s, %s, %s, 'ADMIN')
+            ON CONFLICT (username) DO NOTHING
+            RETURNING id;
+            """,
             (payload.username.strip(), p_hash, salt)
         )
-        conn.commit()
+        res = cur.fetchone()
     except Exception as e:
-        conn.rollback()
         cur.close()
         conn.close()
         raise HTTPException(status_code=500, detail=f"Admin creation database error: {e}")
         
     cur.close()
     conn.close()
+    
+    if not res:
+        raise HTTPException(status_code=400, detail="Username already exists")
+        
     return {"message": f"Admin user '{payload.username}' created successfully"}
 
 def run_ingestion_background(pdf_path: str, seat_matrix_pages: list):
     try:
+        from core.main import run_parallel_pipeline
+
         print(f"Background Ingestion Started. Matrix pages: {seat_matrix_pages}")
         asyncio.run(run_parallel_pipeline(pdf_path, seat_matrix_pages, "output_chunks"))
         print("Background Ingestion Completed Successfully!")
@@ -229,8 +253,9 @@ def upload_prospectus(
         seat_doc = fitz.open()
         
         for p in pages_list:
-            if 0 <= p < doc.page_count:
-                seat_doc.insert_pdf(doc, from_page=p, to_page=p)
+            zero_based_p = p - 1
+            if 0 <= zero_based_p < doc.page_count:
+                seat_doc.insert_pdf(doc, from_page=zero_based_p, to_page=zero_based_p)
                 
         os.makedirs("frontend/static", exist_ok=True)
         static_seat_path = "frontend/static/seat_distribution.pdf"
@@ -246,7 +271,7 @@ def upload_prospectus(
     except Exception as e:
         print(f"Error regenerating seat distribution PDF: {e}")
         
-    seat_matrix_1_based = [p + 1 for p in pages_list]
+    seat_matrix_1_based = pages_list
     background_tasks.add_task(run_ingestion_background, prospectus_path, seat_matrix_1_based)
     
     return {
@@ -271,20 +296,18 @@ def get_seat_distribution():
 @app.post("/user/query")
 def query_chatbot(payload: QueryRequest, current_user = Depends(get_current_user)):
     user_query = payload.query.strip()
+    chat_history = payload.history or []
     if not user_query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
         
     try:
-        if is_seat_distribution_query(user_query):
-            answer = f"For the complete and accurate Seat Distribution Matrix, please refer to the official document: [Seat Distribution PDF]({SEAT_DIST_FILE_LINK})."
-            is_seat_query = True
-        else:
-            answer = get_rag_response(user_query)
-            is_seat_query = False
-            
-        return {
-            "answer": answer,
-            "is_seat_query": is_seat_query
-        }
+        return StreamingResponse(
+            route_chat_stream(user_query, chat_history),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot logic error: {e}")

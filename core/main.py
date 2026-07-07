@@ -16,11 +16,11 @@ text_parser = LlamaParse(
     result_type="markdown", 
     api_key=os.environ.get("LLAMA_CLOUD_API_KEY"),
     system_prompt="""This document contains university undergraduate prospectus pages.
-Many pages contain course curriculum tables. For each course table:
+Extract all content on the page completely and accurately, preserving headings, lists, paragraphs, and tables in markdown.
+For pages with course curriculum tables:
 - Extract the course code, course title, and credit hours (Theory, Practical, and Total).
-- Format the credit hours clearly as 'Th-Pr-Total' (e.g. 3-1-4 or 3-0-3 or NC-NC-NC).
-- Do not merge adjacent columns or numbers.
-- Keep the tables intact as markdown tables."""
+- Format the credit hours clearly as 'Th-Pr-Total' (e.g. 3-1-4 or 3-0-3).
+- Keep tables intact as markdown tables."""
 )
 data_parser = LlamaParse(
     result_type="json", 
@@ -68,11 +68,20 @@ async def parse_single_page_async(page_num: int, page_bytes: bytes, is_matrix_pa
                 # Trigger asynchronous Markdown parsing
                 text_result = await text_parser.aload_data(temp_filename)
                 page_markdown = "\n\n".join([doc.text for doc in text_result])
+                
+                # Split page markdown into smaller overlapping chunks
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200,
+                    separators=["\n\n", "\n", ". ", " ", ""]
+                )
+                split_texts = text_splitter.split_text(page_markdown)
                 return [{
-                    "text": page_markdown,
+                    "text": chunk_text,
                     "source_page": page_num,
                     "content_type": "markdown_prose"
-                }]
+                } for chunk_text in split_texts]
                 
         except Exception as e:
             print(f"❌ Async error on page {page_num}: {e}")
@@ -90,18 +99,49 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
         print("Pinecone API key is not set. Skipping vector database indexing.")
         return
 
-    print("Loading local embedding model for indexing...")
-    from sentence_transformers import SentenceTransformer
+    print("Loading local Model2Vec embedding model for indexing...")
+    from core.embeddings import embed_documents
     from pinecone import Pinecone, ServerlessSpec
     
-    model = SentenceTransformer("all-MiniLM-L6-v2")
     pc = Pinecone(api_key=api_key)
     
-    if index_name not in pc.list_indexes().names():
-        print(f"Creating Pinecone index: {index_name}...")
+    # Robust index name listing across different pinecone SDK versions
+    existing_indexes = pc.list_indexes()
+    index_names = []
+    for idx in existing_indexes:
+        if isinstance(idx, str):
+            index_names.append(idx)
+        elif hasattr(idx, 'name'):
+            index_names.append(idx.name)
+        elif isinstance(idx, dict) and 'name' in idx:
+            index_names.append(idx['name'])
+            
+    should_create = True
+    if index_name in index_names:
+        try:
+            desc = pc.describe_index(index_name)
+            dim = desc.dimension if hasattr(desc, 'dimension') else desc.get('dimension')
+            if dim != 256:
+                print(f"Index {index_name} exists but with dimension {dim}. Recreating with dimension 256...")
+                pc.delete_index(index_name)
+                import time
+                time.sleep(3)
+            else:
+                should_create = False
+        except Exception as e:
+            print(f"Error checking index description: {e}. Recreating index...")
+            try:
+                pc.delete_index(index_name)
+            except Exception:
+                pass
+            import time
+            time.sleep(3)
+            
+    if should_create:
+        print(f"Creating Pinecone index: {index_name} with dimension 256...")
         pc.create_index(
             name=index_name,
-            dimension=384,
+            dimension=256,
             metric="cosine",
             spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
@@ -114,24 +154,28 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
     except Exception as e:
         print(f"Could not clear index: {e}")
         
-    print(f"Embedding and uploading {len(chunks)} chunks to Pinecone...")
+    print(f"Embedding {len(chunks)} chunks using Model2Vec...")
+    texts = [chunk["text"] for chunk in chunks]
+    embeddings = embed_documents(texts)
+    
+    print(f"Uploading vectors to Pinecone...")
     vectors = []
     for i, chunk in enumerate(chunks):
-        text = chunk["text"]
-        embedding = model.encode(text).tolist()
         vectors.append({
             "id": f"chunk_{i}",
-            "values": embedding,
+            "values": embeddings[i],
             "metadata": {
-                "text": text,
+                "text": chunk["text"],
                 "source_page": chunk["source_page"],
                 "content_type": chunk["content_type"]
             }
         })
         
-        if len(vectors) == 100 or i == len(chunks) - 1:
-            index.upsert(vectors=vectors)
-            vectors = []
+    # Batch upsert to prevent payload size issues
+    batch_size = 100
+    for idx in range(0, len(vectors), batch_size):
+        batch = vectors[idx:idx + batch_size]
+        index.upsert(vectors=batch)
             
     print("Pinecone indexing complete!")
 
@@ -179,7 +223,7 @@ async def run_parallel_pipeline(pdf_path: str, seat_matrix_pages: list, output_d
 
 def main():
     # Dynamically read 1-based page numbers from admin_process EXCLUDED_PAGES
-    seat_pages = [p + 1 for p in EXCLUDED_PAGES]
+    seat_pages = EXCLUDED_PAGES
     print(f"Seat matrix pages (1-based) to exclude: {seat_pages}")
     asyncio.run(run_parallel_pipeline("UGProspectus2025.pdf", seat_matrix_pages=seat_pages, output_dir="output_chunks"))
 

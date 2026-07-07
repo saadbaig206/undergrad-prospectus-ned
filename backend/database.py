@@ -3,12 +3,71 @@ import secrets
 import hashlib
 import psycopg2
 
+from psycopg2.pool import ThreadedConnectionPool
+
 DATABASE_URL = os.environ.get("DATABASE_URL")
+_pool = None
+
+def init_pool():
+    global _pool
+    if _pool is None:
+        if not DATABASE_URL:
+            raise ValueError("DATABASE_URL is not set in the environment variables.")
+        # Min 2, Max 15 pooled connections
+        _pool = ThreadedConnectionPool(2, 15, DATABASE_URL)
+
+class PooledConnectionWrapper:
+    def __init__(self, conn, pool):
+        self._conn = conn
+        self._pool = pool
+        self._pooled_returned = False
+
+    def close(self):
+        if not self._pooled_returned:
+            try:
+                self._pool.putconn(self._conn)
+                self._pooled_returned = True
+            except Exception:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 def get_db_connection():
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL is not set in the environment variables.")
-    return psycopg2.connect(DATABASE_URL)
+    init_pool()
+    max_retries = 5
+    for _ in range(max_retries):
+        conn = _pool.getconn()
+        
+        is_alive = False
+        try:
+            conn.rollback()
+            conn.autocommit = True
+            # Run a quick check query to verify the connection is healthy
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+            is_alive = True
+        except Exception:
+            pass
+            
+        if is_alive and conn.closed == 0:
+            return PooledConnectionWrapper(conn, _pool)
+        else:
+            try:
+                _pool.putconn(conn, close=True)
+            except Exception:
+                pass
+                
+    raise RuntimeError("Failed to obtain a healthy database connection from the pool.")
 
 def init_db():
     # Initialize the database tables

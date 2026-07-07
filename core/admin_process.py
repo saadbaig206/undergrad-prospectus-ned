@@ -4,9 +4,9 @@ import nest_asyncio
 from dotenv import load_dotenv
 import fitz  
 from llama_parse import LlamaParse
-from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from core.embeddings import embed_documents
 
 # Initialize async loops safety wrapper
 nest_asyncio.apply()
@@ -19,7 +19,7 @@ MARKDOWN_OUTPUT_PATH = "extracted_content.md"
 PINECONE_INDEX_NAME = "rag-chatbot-index"
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
-# Pages the admin wants to exclude from text parsing (0-indexed)
+# Pages the admin wants to exclude from text parsing (1-indexed)
 EXCLUDED_PAGES = [79, 80, 81] 
 
 # --- 1. Split the PDF ---
@@ -209,9 +209,6 @@ def index_to_pinecone(text, index_name):
         print("Pinecone API key is not set. Skipping vector pipeline index.")
         return
 
-    print("Loading local embedding model...")
-    model = SentenceTransformer(EMBED_MODEL_NAME)
-    
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, 
         chunk_overlap=150,
@@ -226,14 +223,30 @@ def index_to_pinecone(text, index_name):
         
     pc = Pinecone(api_key=api_key)
     
-    if index_name not in pc.list_indexes().names():
-        print(f"Creating Pinecone index: {index_name}...")
-        pc.create_index(
-            name=index_name,
-            dimension=384,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1")
-        )
+    # Recreate index if dimension has changed to 1024
+    try:
+        existing_indexes = pc.list_indexes().names()
+        if index_name in existing_indexes:
+            desc = pc.describe_index(index_name)
+            if desc.dimension != 1024:
+                print(f"Index {index_name} has incorrect dimension {desc.dimension}. Recreating it with 1024 dimensions...")
+                pc.delete_index(index_name)
+    except Exception as e:
+        print(f"Warning checking/deleting index: {e}")
+    
+    try:
+        existing_indexes = pc.list_indexes().names()
+        if index_name not in existing_indexes:
+            print(f"Creating Pinecone index: {index_name}...")
+            pc.create_index(
+                name=index_name,
+                dimension=1024,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1")
+            )
+    except Exception as e:
+        print(f"Failed to create index: {e}")
+        raise e
     
     index = pc.Index(index_name)
     
@@ -244,19 +257,27 @@ def index_to_pinecone(text, index_name):
     except Exception as e:
         print(f"Could not clear index: {e}")
         
-    print(f"Embedding and uploading {len(chunks)} chunks to Pinecone...")
+    print(f"Embedding and preparing {len(chunks)} chunks to Pinecone...")
     vectors = []
-    for i, chunk in enumerate(chunks):
-        embedding = model.encode(chunk).tolist()
-        vectors.append({
-            "id": f"chunk_{i}",
-            "values": embedding,
-            "metadata": {"text": chunk}
-        })
-        
-        if len(vectors) == 100 or i == len(chunks) - 1:
-            index.upsert(vectors=vectors)
-            vectors = []
+    batch_size = 96
+    for i in range(0, len(chunks), batch_size):
+        batch_chunks = chunks[i : i + batch_size]
+        try:
+            embeddings = embed_documents(batch_chunks)
+            for j, (chunk, embedding) in enumerate(zip(batch_chunks, embeddings)):
+                global_idx = i + j
+                vectors.append({
+                    "id": f"chunk_{global_idx}",
+                    "values": embedding,
+                    "metadata": {"text": chunk}
+                })
+        except Exception as e:
+            print(f"Failed to generate embeddings for batch {i // batch_size + 1}: {e}")
+            raise e
+            
+    print(f"Uploading {len(vectors)} vectors to Pinecone...")
+    for i in range(0, len(vectors), 100):
+        index.upsert(vectors=vectors[i : i + 100])
             
     print("Indexing complete!")
 

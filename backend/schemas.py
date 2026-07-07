@@ -1,3 +1,4 @@
+from typing import List, Dict, Optional
 from pydantic import BaseModel
 
 class AuthRequest(BaseModel):
@@ -6,6 +7,7 @@ class AuthRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
+    history: Optional[List[Dict[str, str]]] = []
 
 class CreateAdminRequest(BaseModel):
     username: str
