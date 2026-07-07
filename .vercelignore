@@ -5,4 +5,4 @@ __pycache__/
 .streamlit/
 output_chunks/
 *.pyc
-*.pdf
+UGProspectus2025.pdf
