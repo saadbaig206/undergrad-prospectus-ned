@@ -8,6 +8,10 @@
   ],
   "routes": [
     {
+      "src": "/seat_distribution.pdf",
+      "dest": "/frontend/static/seat_distribution.pdf"
+    },
+    {
       "src": "/(.*)",
       "dest": "api/index.py"
     }
