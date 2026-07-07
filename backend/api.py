@@ -45,6 +45,18 @@ def root():
 def health_check():
     return {"status": "ok"}
 
+@app.get("/list_files")
+def list_files():
+    import os
+    res = []
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for root, dirs, files in os.walk(base):
+        for f in files:
+            path = os.path.relpath(os.path.join(root, f), base)
+            if "venv" not in path and ".git" not in path and "__pycache__" not in path:
+                res.append(path)
+    return {"base": base, "files": res}
+
 # Password utility functions
 def hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
