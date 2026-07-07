@@ -7,6 +7,11 @@ _model_lock = threading.Lock()
 class Model2VecEmbeddings(Embeddings):
     """Local, CPU-friendly embeddings model wrapper using model2vec."""
     def __init__(self, model_name: str):
+        import os
+        # Point cache directories to writeable /tmp path for Vercel/serverless environments
+        os.environ["HF_HOME"] = "/tmp"
+        os.environ["MODEL2VEC_CACHE"] = "/tmp"
+        
         from model2vec import StaticModel
         # This will download the model locally on first run
         self.model = StaticModel.from_pretrained(model_name)
