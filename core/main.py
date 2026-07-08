@@ -71,7 +71,7 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
 
     print("Loading local Model2Vec embedding model for indexing...")
     from core.embeddings import embed_documents
-    from pinecone import Pinecone, ServerlessSpec
+    from pinecone.grpc import PineconeGRPC as Pinecone, ServerlessSpec
     
     pc = Pinecone(api_key=api_key)
     

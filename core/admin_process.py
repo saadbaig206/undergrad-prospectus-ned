@@ -8,7 +8,6 @@ from pinecone import Pinecone, ServerlessSpec
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from core.embeddings import embed_documents
 
-# Initialize async loops safety wrapper
 nest_asyncio.apply()
 load_dotenv()
 

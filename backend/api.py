@@ -2,6 +2,15 @@ import os
 import secrets
 import hashlib
 import datetime
+import socket
+
+# Force IPv4 DNS resolution to prevent slow Windows IPv6 lookup timeouts on external APIs
+orig_getaddrinfo = socket.getaddrinfo
+def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if family == 0 or family == socket.AF_UNSPEC:
+        family = socket.AF_INET
+    return orig_getaddrinfo(host, port, family, type, proto, flags)
+socket.getaddrinfo = patched_getaddrinfo
 import asyncio
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
@@ -26,12 +35,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def keep_pinecone_alive_loop():
+    """Background loop to periodically query Pinecone, keeping the connection pool and serverless instance warm."""
+    from core.chatbot import get_global_httpx_client
+    await asyncio.sleep(5)
+    api_key = os.getenv("PINECONE_API_KEY")
+    host = os.getenv("PINECONE_INDEX_HOST")
+    if not host or not api_key:
+        return
+    url = f"{host}/query" if host.startswith("https://") else f"https://{host}/query"
+    
+    while True:
+        try:
+            client = get_global_httpx_client()
+            await client.post(
+                url,
+                json={
+                    "vector": [0.0] * 256,
+                    "topK": 1,
+                    "includeMetadata": False,
+                    "includeValues": False
+                },
+                headers={
+                    "Api-Key": api_key,
+                    "Content-Type": "application/json"
+                },
+                timeout=5.0
+            )
+        except Exception:
+            pass
+        await asyncio.sleep(10)  # Keepalive query every 10 seconds
+
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     try:
         init_db()
     except Exception as exc:
         print(f"Database initialization skipped or failed: {exc}")
+        
+    # Pre-warm AI and database clients to cut down first-query latency from 3s to under 1s
+    try:
+        from core.chatbot import get_llm, get_global_httpx_client
+        from core.embeddings import get_embeddings_model
+        get_embeddings_model()
+        get_llm()
+        
+        # Warm up the Pinecone connection pool by running a lightweight query (256 dim vector)
+        api_key = os.getenv("PINECONE_API_KEY")
+        host = os.getenv("PINECONE_INDEX_HOST")
+        if host and api_key:
+            url = f"{host}/query" if host.startswith("https://") else f"https://{host}/query"
+            client = get_global_httpx_client()
+            try:
+                await client.post(
+                    url,
+                    json={
+                        "vector": [0.0] * 256,
+                        "topK": 1,
+                        "includeMetadata": False,
+                        "includeValues": False
+                    },
+                    headers={
+                        "Api-Key": api_key,
+                        "Content-Type": "application/json"
+                    },
+                    timeout=5.0
+                )
+                print("🔍 [PINECONE] Direct HTTPX connection pool and socket warming completed successfully!")
+            except Exception as pe:
+                print(f"🔍 [PINECONE] Direct HTTPX pool warming warning: {pe}")
+        print("Pre-warming of Embeddings, Pinecone, and LLM clients completed successfully!")
+    except Exception as e:
+        print(f"Pre-warming warning: {e}")
+        
+    # Launch background keepalive loop to maintain a hot connection
+    asyncio.create_task(keep_pinecone_alive_loop())
 
 @app.get("/")
 def root():
@@ -347,7 +425,7 @@ def get_seat_distribution():
         raise HTTPException(status_code=404, detail="Seat distribution PDF not found")
 
 @app.post("/user/query")
-def query_chatbot(payload: QueryRequest, current_user = Depends(get_current_user)):
+async def query_chatbot(payload: QueryRequest, current_user = Depends(get_current_user)):
     user_query = payload.query.strip()
     chat_history = payload.history or []
     if not user_query:

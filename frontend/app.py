@@ -1,9 +1,18 @@
 import streamlit as st
 import os
 import requests
+import socket
+
+# Force IPv4 DNS resolution to prevent slow Windows IPv6 lookup timeouts on external APIs
+orig_getaddrinfo = socket.getaddrinfo
+def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if family == 0 or family == socket.AF_UNSPEC:
+        family = socket.AF_INET
+    return orig_getaddrinfo(host, port, family, type, proto, flags)
+socket.getaddrinfo = patched_getaddrinfo
 
 # Point to the FastAPI backend API
-API_URL = os.environ.get("API_URL", "http://localhost:8000")
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 # Premium CSS Styling
 custom_css = """
@@ -99,9 +108,8 @@ header[data-testid="stHeader"] {visibility: hidden;}
 st.set_page_config(page_title="UG Prospectus Chatbot", page_icon="🎓", layout="centered")
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# Custom header
 st.markdown("<h1>🎓 UG Prospectus AI Assistant</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color: #94a3b8; font-size: 1.1em;'>Interact with the official University Undergraduate Prospectus 2025. Get accurate answers instantly.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #94a3b8; font-size: 1.1em;'>Interact with the official University Undergraduate Prospectus. Get accurate answers instantly.</p>", unsafe_allow_html=True)
 st.markdown("---")
 
 # Session state setup
@@ -222,7 +230,7 @@ if app_mode == "💬 Chatbot Interface":
                     resp.encoding = resp.encoding or "utf-8"
 
                     def get_stream():
-                        for chunk in resp.iter_content(chunk_size=1, decode_unicode=True):
+                        for chunk in resp.iter_content(chunk_size=None, decode_unicode=True):
                             if chunk:
                                 yield chunk
                                 
