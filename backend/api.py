@@ -3,7 +3,7 @@ import secrets
 import hashlib
 import datetime
 import asyncio
-from typing import List, Optional
+from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -45,7 +45,6 @@ def root():
 def health_check():
     return {"status": "ok"}
 
-# Password utility functions
 def hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
         'sha256',
@@ -54,7 +53,6 @@ def hash_password(password: str, salt: str) -> str:
         100000
     ).hex()
 
-# Authentication dependency
 def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -217,7 +215,7 @@ def upload_prospectus(
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-    prospectus_path = "UGProspectus2025.pdf"
+    prospectus_path = "UGProspectus.pdf"
     try:
         with open(prospectus_path, "wb") as buffer:
             buffer.write(file.file.read())
@@ -240,7 +238,6 @@ def upload_prospectus(
             f"EXCLUDED_PAGES = {pages_list}",
             admin_code
         )
-        
         with open(admin_process_path, "w", encoding="utf-8") as f:
             f.write(new_code)
         print(f"Updated EXCLUDED_PAGES to {pages_list} in core/admin_process.py")

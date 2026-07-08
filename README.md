@@ -166,6 +166,10 @@ In your Vercel project dashboard, navigate to **Settings > Environment Variables
 - `DATABASE_URL`: Your Neon PostgreSQL connection string.
 - `PINECONE_API_KEY`: Your Pinecone credentials.
 - `GROQ_API_KEY`: Your Groq API key.
+- `SUPABASE_URL`: (Optional) Your Supabase project URL (e.g. `https://peijeipftutzujpmzttd.supabase.co`).
+- `SUPABASE_KEY`: (Optional) Your Supabase service role secret key.
+- `SUPABASE_BUCKET`: (Optional) Your public storage bucket name (e.g. `assets`).
+- `SEAT_DIST_FILE_LINK`: (Optional) The public link to serve the PDF to users (e.g. `https://peijeipftutzujpmzttd.supabase.co/storage/v1/object/public/assets/seat_distribution.pdf?download=`).
 
 ### 3. Deploy
 Push your commits to your `main` branch on GitHub to trigger automatic Vercel builds:
@@ -175,3 +179,18 @@ git commit -m "Deploy to Vercel"
 git push origin main
 ```
 Once built, the API and PDF download link will be served globally at your Vercel deployment domain.
+
+---
+
+## ⚡ Key Features & Custom Routing
+
+### 1. Robust PDF Delivery Pipeline (Supabase Storage)
+Serving large binary files (like PDFs) from serverless containers on Vercel is highly limited due to read-only filesystems and ephemeral container lifetimes. 
+*   **Programmatic Uploads**: The FastAPI backend includes a programmatic integration that uploads and overwrites `seat_distribution.pdf` in a **Supabase Storage** bucket with `x-upsert: true` whenever the admin updates the prospectus.
+*   **Direct Cloud Downloads**: Adding `?download=` to the Supabase link forces the browser to download the file directly instead of opening a preview tab.
+*   **Streaming Fallback**: The `/seat_distribution.pdf` backend endpoint dynamically streams the file from Supabase in production and falls back to local disk in development.
+
+### 2. Intelligent Administrative Query Routing
+University deans oversee whole **Faculties** rather than individual **Departments**. The RAG system handles this using a custom context routing layout:
+*   **Hierarchy Mapping**: When queries about department-level deans (e.g., "Who is the dean of Software Engineering?") are received, the LLM maps the department to its parent Faculty (e.g., ECE) and correctly identifies the respective Dean (e.g., **Prof. Dr. Saad Ahmed Qazi**).
+*   **Direct Answer Context**: The system instructions guide the LLM to provide direct, detailed answers based on organizational hierarchy instead of returning general refusal fallbacks.

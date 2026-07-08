@@ -2,7 +2,6 @@ import os
 import sys
 from functools import lru_cache
 from dotenv import load_dotenv
-from groq import Groq
 from pinecone import Pinecone
 from core.intent_detector import IntentDetector
 
@@ -341,7 +340,8 @@ Instructions:
 1. Provide a direct, detailed, and clear answer.
 2. Structure your response with bullet points and bold text for readability.
 3. If the context does not contain the exact specific detail (like a date or specific value), do NOT say 'I don't know' or 'I don't have the information'. Instead, explain what the document states generally about the topic, cite the relevant section name/number from the context, and guide the user on how they can find the official update (e.g., checking the university's official website or admission office as mentioned in section X).
-4. Always maintain a professional, encouraging, and authoritative tone. Avoid negative phrasing like 'I cannot answer' or 'this is not mentioned'."""
+4. Always maintain a professional, encouraging, and authoritative tone. Avoid negative phrasing like 'I cannot answer' or 'this is not mentioned'.
+5. Note that university departments (e.g., Computer Science, Software Engineering, Civil Engineering, Polymer Engineering) do not have individual deans; they fall under larger Faculties led by Deans. If the user asks for the dean of a specific department, identify which Faculty that department belongs to in the context, and name the Dean of that Faculty (e.g., Prof. Dr. Saad Ahmed Qazi is the Dean of the Faculty of ECE which includes Computer Systems, Software Engineering, etc.)."""
 
     # 4. Build the final messages array based on short vs long chat context rules
     messages = []

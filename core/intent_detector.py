@@ -17,55 +17,31 @@ class IntentDetector:
 
 
         self.seat_keywords = {
-
             "seat",
-
             "seats",
-
             "quota",
-
             "intake",
-
             "capacity",
-
             "strength",
-
             "vacancy",
-
             "vacancies",
-
             "batch size",
-
             "allocation",
-
             "distribution",
-
             "matrix"
-
         }
 
         self.seat_patterns = [
-
             r"how many.*students",
-
             r"how many.*seat",
-
             r"seat.*available",
-
             r"available.*seat",
-
             r"total.*seat",
-
             r"seat.*matrix",
-
             r"seat.*distribution",
-
             r"intake",
-
             r"capacity",
-
             r"quota"
-
         ]
 
     def cosine(self, a, b):

@@ -12,8 +12,7 @@ from core.embeddings import embed_documents
 nest_asyncio.apply()
 load_dotenv()
 
-# --- Configuration ---
-PDF_PATH = "UGProspectus2025.pdf"
+PDF_PATH = "UGProspectus.pdf"
 SEAT_DIST_PDF_PATH = "seat_distribution.pdf"
 MARKDOWN_OUTPUT_PATH = "extracted_content.md"
 PINECONE_INDEX_NAME = "rag-chatbot-index"
