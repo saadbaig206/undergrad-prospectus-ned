@@ -14,25 +14,55 @@ class ONNXEmbeddings(Embeddings):
     def __init__(self, model_name: str):
         # Resolve HF snapshot folder path dynamically
         model_cache_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--{model_name.replace('/', '--')}/snapshots")
-        if not os.path.exists(model_cache_dir):
-            raise RuntimeError(
-                f"Model cache folder not found: {model_cache_dir}. "
-                f"Please ensure you run 'huggingface-cli download {model_name}' first."
-            )
         
-        snapshots = os.listdir(model_cache_dir)
-        if not snapshots:
-            raise RuntimeError(f"No downloaded snapshots found in cache directory: {model_cache_dir}")
+        onnx_path = None
+        tokenizer_path = None
         
-        snapshot_path = os.path.join(model_cache_dir, snapshots[0])
-        onnx_path = os.path.join(snapshot_path, "onnx", "model.onnx")
-        tokenizer_path = os.path.join(snapshot_path, "tokenizer.json")
-        
-        if not os.path.exists(onnx_path) or not os.path.exists(tokenizer_path):
-            raise RuntimeError(
-                f"Required model files missing in snapshot: {snapshot_path}. "
-                f"Expected onnx/model.onnx and tokenizer.json."
-            )
+        # 1. Check if files exist in local HuggingFace cache
+        if os.path.exists(model_cache_dir):
+            try:
+                snapshots = os.listdir(model_cache_dir)
+                if snapshots:
+                    snapshot_path = os.path.join(model_cache_dir, snapshots[0])
+                    cand_onnx = os.path.join(snapshot_path, "onnx", "model.onnx")
+                    cand_tok = os.path.join(snapshot_path, "tokenizer.json")
+                    if os.path.exists(cand_onnx) and os.path.exists(cand_tok):
+                        onnx_path = cand_onnx
+                        tokenizer_path = cand_tok
+            except Exception as e:
+                print(f"HF cache reading warning: {e}")
+                
+        # 2. Download files dynamically if cache is missing (e.g., on Vercel)
+        if not onnx_path or not tokenizer_path:
+            import urllib.request
+            local_dir = "/tmp/model_cache"
+            os.makedirs(local_dir, exist_ok=True)
+            
+            onnx_path = os.path.join(local_dir, "model.onnx")
+            tokenizer_path = os.path.join(local_dir, "tokenizer.json")
+            
+            def download_with_user_agent(url: str, dest: str):
+                print(f"Downloading {url} to {dest}...")
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                )
+                with urllib.request.urlopen(req) as response, open(dest, "wb") as out_file:
+                    out_file.write(response.read())
+            
+            if not os.path.exists(onnx_path):
+                onnx_url = f"https://huggingface.co/{model_name}/resolve/main/onnx/model.onnx"
+                try:
+                    download_with_user_agent(onnx_url, onnx_path)
+                except Exception as ex:
+                    raise RuntimeError(f"Failed to download ONNX model from {onnx_url}: {ex}")
+                    
+            if not os.path.exists(tokenizer_path):
+                tokenizer_url = f"https://huggingface.co/{model_name}/resolve/main/tokenizer.json"
+                try:
+                    download_with_user_agent(tokenizer_url, tokenizer_path)
+                except Exception as ex:
+                    raise RuntimeError(f"Failed to download tokenizer from {tokenizer_url}: {ex}")
             
         print(f"Loading ONNX session from: {onnx_path}")
         self.session = ort.InferenceSession(onnx_path)
