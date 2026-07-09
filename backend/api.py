@@ -37,34 +37,23 @@ app.add_middleware(
 
 async def keep_pinecone_alive_loop():
     """Background loop to periodically query Pinecone, keeping the connection pool and serverless instance warm."""
-    from core.chatbot import get_global_httpx_client
-    await asyncio.sleep(5)
-    api_key = os.getenv("PINECONE_API_KEY")
-    host = os.getenv("PINECONE_INDEX_HOST")
-    if not host or not api_key:
-        return
-    url = f"{host}/query" if host.startswith("https://") else f"https://{host}/query"
-    
-    while True:
-        try:
-            client = get_global_httpx_client()
-            await client.post(
-                url,
-                json={
-                    "vector": [0.0] * 256,
-                    "topK": 1,
-                    "includeMetadata": False,
-                    "includeValues": False
-                },
-                headers={
-                    "Api-Key": api_key,
-                    "Content-Type": "application/json"
-                },
-                timeout=5.0
-            )
-        except Exception:
-            pass
-        await asyncio.sleep(10)  # Keepalive query every 10 seconds
+    await asyncio.sleep(3)
+    try:
+        from core.chatbot import get_pinecone_index
+        index = get_pinecone_index()
+        dim = int(os.getenv("EMBEDDING_DIMENSION", "384"))
+        while True:
+            try:
+                await asyncio.to_thread(
+                    index.query,
+                    vector=[0.0] * dim,
+                    top_k=1
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(10)  # Keepalive query every 10 seconds
+    except Exception:
+        pass
 
 @app.on_event("startup")
 async def startup_event():
@@ -75,41 +64,30 @@ async def startup_event():
         
     # Pre-warm AI and database clients to cut down first-query latency from 3s to under 1s
     try:
-        from core.chatbot import get_llm, get_global_httpx_client
+        from core.chatbot import get_llm, get_pinecone_index
         from core.embeddings import get_embeddings_model
         get_embeddings_model()
         get_llm()
         
-        # Warm up the Pinecone connection pool by running a lightweight query (256 dim vector)
-        api_key = os.getenv("PINECONE_API_KEY")
-        host = os.getenv("PINECONE_INDEX_HOST")
-        if host and api_key:
-            url = f"{host}/query" if host.startswith("https://") else f"https://{host}/query"
-            client = get_global_httpx_client()
-            try:
-                await client.post(
-                    url,
-                    json={
-                        "vector": [0.0] * 256,
-                        "topK": 1,
-                        "includeMetadata": False,
-                        "includeValues": False
-                    },
-                    headers={
-                        "Api-Key": api_key,
-                        "Content-Type": "application/json"
-                    },
-                    timeout=5.0
-                )
-                print("🔍 [PINECONE] Direct HTTPX connection pool and socket warming completed successfully!")
-            except Exception as pe:
-                print(f"🔍 [PINECONE] Direct HTTPX pool warming warning: {pe}")
+        # Warm up the Pinecone connection pool by running a lightweight query (384 dim vector)
+        try:
+            index = get_pinecone_index()
+            dim = int(os.getenv("EMBEDDING_DIMENSION", "384"))
+            await asyncio.to_thread(
+                index.query,
+                vector=[0.0] * dim,
+                top_k=1
+            )
+            print("🔍 [PINECONE] gRPC channel warming completed successfully!")
+        except Exception as pe:
+            print(f"🔍 [PINECONE] gRPC pool warming warning: {pe}")
         print("Pre-warming of Embeddings, Pinecone, and LLM clients completed successfully!")
     except Exception as e:
         print(f"Pre-warming warning: {e}")
         
-    # Launch background keepalive loop to maintain a hot connection
-    asyncio.create_task(keep_pinecone_alive_loop())
+    # Launch background keepalive loop to maintain a hot connection (only if not on Vercel)
+    if not os.environ.get("VERCEL"):
+        asyncio.create_task(keep_pinecone_alive_loop())
 
 @app.get("/")
 def root():
@@ -273,115 +251,113 @@ def create_admin(payload: CreateAdminRequest, admin_user = Depends(get_current_a
         
     return {"message": f"Admin user '{payload.username}' created successfully"}
 
-def run_ingestion_background(pdf_path: str, seat_matrix_pages: list):
+def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, academic_level: str):
     try:
         from core.main import run_parallel_pipeline
 
-        print(f"Background Ingestion Started. Matrix pages: {seat_matrix_pages}")
-        asyncio.run(run_parallel_pipeline(pdf_path, seat_matrix_pages, "output_chunks"))
-        print("Background Ingestion Completed Successfully!")
+        print(f"Background Ingestion Started for {academic_level}. Matrix pages: {seat_matrix_pages}")
+        asyncio.run(run_parallel_pipeline(pdf_path, seat_matrix_pages, "output_chunks", academic_level=academic_level))
+        print(f"Background Ingestion Completed Successfully for {academic_level}!")
     except Exception as e:
-        print(f"Background Ingestion Failed: {e}")
+        print(f"Background Ingestion Failed for {academic_level}: {e}")
 
 @app.post("/admin/upload-prospectus")
 def upload_prospectus(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    excluded_pages: str = Form(...),
+    excluded_pages: str = Form(""),
+    academic_level: str = Form("undergraduate"),
     admin_user = Depends(get_current_admin)
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-    prospectus_path = "UGProspectus.pdf"
+    academic_level = academic_level.strip().lower()
+    if academic_level not in ("undergraduate", "postgraduate"):
+        raise HTTPException(status_code=400, detail="academic_level must be either 'undergraduate' or 'postgraduate'")
+
+    prospectus_path = "UGProspectus.pdf" if academic_level == "undergraduate" else "PGProspectus.pdf"
     try:
         with open(prospectus_path, "wb") as buffer:
             buffer.write(file.file.read())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not save uploaded PDF: {e}")
         
-    try:
-        pages_list = [int(p.strip()) for p in excluded_pages.split(",") if p.strip()]
-    except ValueError:
-        raise HTTPException(status_code=400, detail="excluded_pages must be a comma-separated list of integers")
-        
-    try:
-        admin_process_path = "core/admin_process.py"
-        with open(admin_process_path, "r", encoding="utf-8") as f:
-            admin_code = f.read()
+    pages_list = []
+    if academic_level == "undergraduate":
+        try:
+            pages_list = [int(p.strip()) for p in excluded_pages.split(",") if p.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="excluded_pages must be a comma-separated list of integers")
             
-        import re
-        new_code = re.sub(
-            r"EXCLUDED_PAGES\s*=\s*\[.*?\]",
-            f"EXCLUDED_PAGES = {pages_list}",
-            admin_code
-        )
-        with open(admin_process_path, "w", encoding="utf-8") as f:
-            f.write(new_code)
-        print(f"Updated EXCLUDED_PAGES to {pages_list} in core/admin_process.py")
-    except Exception as e:
-        print(f"Could not update EXCLUDED_PAGES in core/admin_process.py: {e}")
-        
+    # Save the configuration to the PostgreSQL database instead of writing code to disk
+    from backend.database import save_prospectus_metadata
     try:
-        import fitz
-        doc = fitz.open(prospectus_path)
-        seat_doc = fitz.open()
-        
-        for p in pages_list:
-            zero_based_p = p - 1
-            if 0 <= zero_based_p < doc.page_count:
-                seat_doc.insert_pdf(doc, from_page=zero_based_p, to_page=zero_based_p)
-                
-        os.makedirs("frontend/static", exist_ok=True)
-        os.makedirs("public", exist_ok=True)
-        static_seat_path = "frontend/static/seat_distribution.pdf"
-        root_seat_path = "seat_distribution.pdf"
-        public_seat_path = "public/seat_distribution.pdf"
-        
-        seat_doc.save(static_seat_path)
-        seat_doc.close()
-        doc.close()
-        
-        import shutil
-        shutil.copy(static_seat_path, root_seat_path)
-        shutil.copy(static_seat_path, public_seat_path)
-        print("Regenerated seat_distribution.pdf locally and in public assets.")
-        
-        # Upload to Supabase Storage if configured
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
-        supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
-        
-        if supabase_url and supabase_key:
-            try:
-                import requests
-                supabase_url = supabase_url.rstrip("/")
-                upload_url = f"{supabase_url}/storage/v1/object/{supabase_bucket}/seat_distribution.pdf"
-                
-                headers = {
-                    "Authorization": f"Bearer {supabase_key}",
-                    "Content-Type": "application/pdf",
-                    "x-upsert": "true"
-                }
-                
-                with open(static_seat_path, "rb") as f:
-                    file_data = f.read()
-                    
-                resp = requests.post(upload_url, headers=headers, data=file_data)
-                if resp.status_code in (200, 201):
-                    print("Successfully uploaded and overwrote seat_distribution.pdf in Supabase Storage!")
-                else:
-                    print(f"Supabase upload failed with status {resp.status_code}: {resp.text}")
-            except Exception as e:
-                print(f"Failed to upload seat distribution PDF to Supabase: {e}")
+        save_prospectus_metadata(academic_level, pages_list)
+        print(f"Saved {academic_level} excluded_pages: {pages_list} to PostgreSQL.")
     except Exception as e:
-        print(f"Error regenerating seat distribution PDF: {e}")
-        
-    seat_matrix_1_based = pages_list
-    background_tasks.add_task(run_ingestion_background, prospectus_path, seat_matrix_1_based)
+        print(f"Could not save prospectus metadata to database: {e}")
+
+    # Generate Seat Distribution PDF only for undergraduate level
+    if academic_level == "undergraduate" and pages_list:
+        try:
+            import fitz
+            doc = fitz.open(prospectus_path)
+            seat_doc = fitz.open()
+            
+            for p in pages_list:
+                zero_based_p = p - 1
+                if 0 <= zero_based_p < doc.page_count:
+                    seat_doc.insert_pdf(doc, from_page=zero_based_p, to_page=zero_based_p)
+                    
+            os.makedirs("frontend/static", exist_ok=True)
+            os.makedirs("public", exist_ok=True)
+            static_seat_path = "frontend/static/seat_distribution.pdf"
+            root_seat_path = "seat_distribution.pdf"
+            public_seat_path = "public/seat_distribution.pdf"
+            
+            seat_doc.save(static_seat_path)
+            seat_doc.close()
+            doc.close()
+            
+            import shutil
+            shutil.copy(static_seat_path, root_seat_path)
+            shutil.copy(static_seat_path, public_seat_path)
+            print("Regenerated seat_distribution.pdf locally and in public assets.")
+            
+            supabase_url = os.getenv("SUPABASE_URL")
+            supabase_key = os.getenv("SUPABASE_KEY")
+            supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
+            
+            if supabase_url and supabase_key:
+                try:
+                    import requests
+                    supabase_url = supabase_url.rstrip("/")
+                    upload_url = f"{supabase_url}/storage/v1/object/{supabase_bucket}/seat_distribution.pdf"
+                    
+                    headers = {
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/pdf",
+                        "x-upsert": "true"
+                    }
+                    
+                    with open(static_seat_path, "rb") as f:
+                        file_data = f.read()
+                        
+                    resp = requests.post(upload_url, headers=headers, data=file_data)
+                    if resp.status_code in (200, 201):
+                        print("Successfully uploaded and overwrote seat_distribution.pdf in Supabase Storage!")
+                    else:
+                        print(f"Supabase upload failed with status {resp.status_code}: {resp.text}")
+                except Exception as e:
+                    print(f"Failed to upload seat distribution PDF to Supabase: {e}")
+        except Exception as e:
+            print(f"Error regenerating seat distribution PDF: {e}")
+
+    background_tasks.add_task(run_ingestion_background, prospectus_path, pages_list, academic_level)
     
     return {
-        "message": "Prospectus uploaded successfully. Ingestion and indexing pipeline started in the background.",
+        "message": f"{academic_level.capitalize()} prospectus uploaded successfully. Ingestion and indexing pipeline started in the background.",
         "excluded_pages_applied": pages_list
     }
 
@@ -440,5 +416,7 @@ async def query_chatbot(payload: QueryRequest, current_user = Depends(get_curren
                 "X-Accel-Buffering": "no",
             },
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chatbot logic error: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot logic error: {e}")

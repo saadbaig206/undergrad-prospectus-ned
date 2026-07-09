@@ -27,3 +27,7 @@ extracted_content.md
 
 .vercel
 .env*
+
+# Large Prospectus PDFs
+UGProspectus.pdf
+PGProspectus.pdf

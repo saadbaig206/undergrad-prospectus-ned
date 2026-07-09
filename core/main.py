@@ -11,7 +11,6 @@ from core.admin_process import EXCLUDED_PAGES
 
 load_dotenv()
 
-# Initialize global shared cloud parsers
 text_parser = LlamaParse(
     result_type="markdown", 
     api_key=os.environ.get("LLAMA_CLOUD_API_KEY"),
@@ -28,14 +27,18 @@ SEMAPHORE = asyncio.Semaphore(5)
 async def parse_single_page_async(page_num: int, page_bytes: bytes):
     """Worker task that handles a single page API call concurrently with rate limit handling"""
     async with SEMAPHORE:
-        temp_filename = f"temp_async_p_{page_num}.pdf"
+        temp_filename = f"temp_async_p_{page_num}.png"
         
-        # Write page bytes to disk temporarily for the API wrapper
-        with open(temp_filename, "wb") as f:
-            f.write(page_bytes)
-            
         try:
-            # Trigger asynchronous Markdown parsing
+            import fitz
+            # Open PDF from bytes and render to high-resolution PNG (DPI 150)
+            doc = fitz.open(stream=page_bytes, filetype="pdf")
+            page = doc[0] # Single-page PDF
+            pix = page.get_pixmap(dpi=150)
+            pix.save(temp_filename)
+            doc.close()
+            
+            # Trigger asynchronous Markdown parsing on the PNG image
             text_result = await text_parser.aload_data(temp_filename)
             page_markdown = "\n\n".join([doc.text for doc in text_result])
             
@@ -63,7 +66,7 @@ async def parse_single_page_async(page_num: int, page_bytes: bytes):
                 except Exception:
                     pass
 
-def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
+def index_chunks_to_pinecone(chunks, academic_level="undergraduate", index_name="rag-chatbot-index"):
     api_key = os.environ.get("PINECONE_API_KEY")
     if not api_key:
         print("Pinecone API key is not set. Skipping vector database indexing.")
@@ -71,7 +74,8 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
 
     print("Loading local Model2Vec embedding model for indexing...")
     from core.embeddings import embed_documents
-    from pinecone.grpc import PineconeGRPC as Pinecone, ServerlessSpec
+    from pinecone.grpc import PineconeGRPC as Pinecone
+    from pinecone import ServerlessSpec
     
     pc = Pinecone(api_key=api_key)
     
@@ -86,13 +90,14 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
         elif isinstance(idx, dict) and 'name' in idx:
             index_names.append(idx['name'])
             
+    EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "256"))
     should_create = True
     if index_name in index_names:
         try:
             desc = pc.describe_index(index_name)
             dim = desc.dimension if hasattr(desc, 'dimension') else desc.get('dimension')
-            if dim != 256:
-                print(f"Index {index_name} exists but with dimension {dim}. Recreating with dimension 256...")
+            if dim != EMBEDDING_DIMENSION:
+                print(f"Index {index_name} exists but with dimension {dim}. Recreating with dimension {EMBEDDING_DIMENSION}...")
                 pc.delete_index(index_name)
                 import time
                 time.sleep(3)
@@ -108,10 +113,10 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
             time.sleep(3)
             
     if should_create:
-        print(f"Creating Pinecone index: {index_name} with dimension 256...")
+        print(f"Creating Pinecone index: {index_name} with dimension {EMBEDDING_DIMENSION}...")
         pc.create_index(
             name=index_name,
-            dimension=256,
+            dimension=EMBEDDING_DIMENSION,
             metric="cosine",
             spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
@@ -119,8 +124,8 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
     index = pc.Index(index_name)
     
     try:
-        print("Clearing existing index...")
-        index.delete(delete_all=True)
+        print(f"Clearing existing index data for academic_level: {academic_level}...")
+        index.delete(filter={"academic_level": academic_level})
     except Exception as e:
         print(f"Could not clear index: {e}")
         
@@ -132,12 +137,13 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
     vectors = []
     for i, chunk in enumerate(chunks):
         vectors.append({
-            "id": f"chunk_{i}",
+            "id": f"{academic_level}_chunk_{i}",
             "values": embeddings[i],
             "metadata": {
                 "text": chunk["text"],
                 "source_page": chunk["source_page"],
-                "content_type": chunk["content_type"]
+                "content_type": chunk["content_type"],
+                "academic_level": academic_level
             }
         })
         
@@ -149,7 +155,7 @@ def index_chunks_to_pinecone(chunks, index_name="rag-chatbot-index"):
             
     print("Pinecone indexing complete!")
 
-async def run_parallel_pipeline(pdf_path: str, seat_matrix_pages: list, output_dir: str):
+async def run_parallel_pipeline(pdf_path: str, seat_matrix_pages: list, output_dir: str, academic_level: str = "undergraduate"):
     start_time = time.time()
     pdf_file = Path(pdf_path)
     reader = pypdf.PdfReader(pdf_file)
@@ -188,12 +194,12 @@ async def run_parallel_pipeline(pdf_path: str, seat_matrix_pages: list, output_d
     print(f"\nParallel pipeline finished in: {time.time() - start_time:.2f} seconds!")
     print(f"Saved to: {output_payload_path}")
 
-    index_chunks_to_pinecone(final_rag_chunks)
+    index_chunks_to_pinecone(final_rag_chunks, academic_level=academic_level)
 
 def main():
     seat_pages = EXCLUDED_PAGES
     print(f"Seat matrix pages (1-based) to exclude: {seat_pages}")
-    asyncio.run(run_parallel_pipeline("UGProspectus.pdf", seat_matrix_pages=seat_pages, output_dir="output_chunks"))
+    asyncio.run(run_parallel_pipeline("UGProspectus.pdf", seat_matrix_pages=seat_pages, output_dir="output_chunks", academic_level="undergraduate"))
 
 if __name__ == "__main__":
     main()

@@ -19,6 +19,7 @@ class IntentDetector:
         self.seat_keywords = {
             "seat",
             "seats",
+            "eats",
             "quota",
             "intake",
             "capacity",
@@ -99,6 +100,12 @@ class IntentDetector:
         return seat, general
 
     def classify(self, query, query_vector=None):
+        # Direct keyword override for strong indicator words (including common typos like 'eats')
+        query_clean = re.sub(r"[^\w\s]", "", query.lower().strip())
+        words = set(query_clean.split())
+        strong_indicators = {"seat", "seats", "eats", "sats", "seates", "quota", "vacancy", "vacancies", "allocation", "distribution", "matrix"}
+        if any(w in words for w in strong_indicators):
+            return "SEAT"
 
         keyword = self.keyword_score(query)
 

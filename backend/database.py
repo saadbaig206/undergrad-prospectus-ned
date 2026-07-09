@@ -89,6 +89,12 @@ def init_db():
         expires_at TIMESTAMP NOT NULL
     );
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS prospectus_metadata (
+        academic_level VARCHAR(50) PRIMARY KEY,
+        excluded_pages INT[] NOT NULL DEFAULT '{}'::INT[]
+    );
+    """)
     
     # Check if there is an admin seeded, if not seed a default
     cur.execute("SELECT COUNT(*) FROM users WHERE role = 'ADMIN';")
@@ -109,3 +115,33 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
+
+def save_prospectus_metadata(level: str, excluded_pages: list[int]):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO prospectus_metadata (academic_level, excluded_pages)
+            VALUES (%s, %s)
+            ON CONFLICT (academic_level) DO UPDATE SET excluded_pages = EXCLUDED.excluded_pages;
+            """,
+            (level, excluded_pages)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_prospectus_metadata(level: str) -> list[int]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT excluded_pages FROM prospectus_metadata WHERE academic_level = %s;", (level,))
+        row = cur.fetchone()
+        if row:
+            return list(row[0])
+        return []
+    finally:
+        cur.close()
+        conn.close()
