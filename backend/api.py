@@ -62,6 +62,11 @@ async def startup_event():
     except Exception as exc:
         print(f"Database initialization skipped or failed: {exc}")
         
+    # Skip pre-warming on Vercel to prevent startup timeouts (under 10s limits)
+    if os.environ.get("VERCEL"):
+        print("Running on Vercel: skipping startup pre-warming to avoid timeouts.")
+        return
+        
     # Pre-warm AI and database clients to cut down first-query latency from 3s to under 1s
     try:
         from core.chatbot import get_llm, get_pinecone_index

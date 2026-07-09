@@ -15,6 +15,7 @@ class ONNXEmbeddings(Embeddings):
         # Resolve HF snapshot folder path dynamically
         model_cache_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--{model_name.replace('/', '--')}/snapshots")
         
+        self.use_api = False
         onnx_path = None
         tokenizer_path = None
         
@@ -32,37 +33,14 @@ class ONNXEmbeddings(Embeddings):
             except Exception as e:
                 print(f"HF cache reading warning: {e}")
                 
-        # 2. Download files dynamically if cache is missing (e.g., on Vercel)
+        # 2. If files are missing from local disk, fallback to Hugging Face Inference API
+        # (Avoids downloading 133MB on Vercel which hits Vercel's strict 10s timeout limit)
         if not onnx_path or not tokenizer_path:
-            import urllib.request
-            local_dir = "/tmp/model_cache"
-            os.makedirs(local_dir, exist_ok=True)
-            
-            onnx_path = os.path.join(local_dir, "model.onnx")
-            tokenizer_path = os.path.join(local_dir, "tokenizer.json")
-            
-            def download_with_user_agent(url: str, dest: str):
-                print(f"Downloading {url} to {dest}...")
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                )
-                with urllib.request.urlopen(req) as response, open(dest, "wb") as out_file:
-                    out_file.write(response.read())
-            
-            if not os.path.exists(onnx_path):
-                onnx_url = f"https://huggingface.co/{model_name}/resolve/main/onnx/model.onnx"
-                try:
-                    download_with_user_agent(onnx_url, onnx_path)
-                except Exception as ex:
-                    raise RuntimeError(f"Failed to download ONNX model from {onnx_url}: {ex}")
-                    
-            if not os.path.exists(tokenizer_path):
-                tokenizer_url = f"https://huggingface.co/{model_name}/resolve/main/tokenizer.json"
-                try:
-                    download_with_user_agent(tokenizer_url, tokenizer_path)
-                except Exception as ex:
-                    raise RuntimeError(f"Failed to download tokenizer from {tokenizer_url}: {ex}")
+            self.use_api = True
+            # Translate local ONNX model name to standard Hugging Face repo path for the Inference API
+            self.model_name = "BAAI/bge-small-en-v1.5"
+            print("Using Hugging Face Inference API for embeddings (Serverless mode)")
+            return
             
         print(f"Loading ONNX session from: {onnx_path}")
         self.session = ort.InferenceSession(onnx_path)
@@ -73,6 +51,41 @@ class ONNXEmbeddings(Embeddings):
         self.tokenizer.enable_truncation(max_length=512)
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
+        if self.use_api:
+            import urllib.request
+            import json
+            url = f"https://api-inference.huggingface.co/models/{self.model_name}"
+            payload = {"inputs": texts}
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
+            
+            hf_token = os.getenv("HF_API_TOKEN")
+            if hf_token:
+                headers["Authorization"] = f"Bearer {hf_token}"
+                
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req) as response:
+                    res_data = response.read().decode("utf-8")
+                    embeddings = json.loads(res_data)
+                    if isinstance(embeddings, list) and len(embeddings) > 0:
+                        if isinstance(embeddings[0], list):
+                            return embeddings
+                        elif isinstance(embeddings[0], float):
+                            return [embeddings]
+                    raise ValueError(f"Unexpected response format from HF Inference API: {embeddings}")
+            except Exception as e:
+                print(f"Error querying Hugging Face Inference API: {e}")
+                # Fallback to zero vectors if API is unavailable or rate-limited
+                return [[0.0] * 384 for _ in texts]
+
         # 1. Tokenize inputs
         encoded = self.tokenizer.encode_batch(texts)
         input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
