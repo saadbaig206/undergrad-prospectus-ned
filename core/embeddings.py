@@ -2,8 +2,6 @@ import os
 import sys
 import threading
 import numpy as np
-import onnxruntime as ort
-from tokenizers import Tokenizer
 from langchain_core.embeddings import Embeddings
 
 _model_instance = None
@@ -41,6 +39,9 @@ class ONNXEmbeddings(Embeddings):
             self.model_name = "BAAI/bge-small-en-v1.5"
             print("Using Hugging Face Inference API for embeddings (Serverless mode)")
             return
+            
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
             
         print(f"Loading ONNX session from: {onnx_path}")
         self.session = ort.InferenceSession(onnx_path)
