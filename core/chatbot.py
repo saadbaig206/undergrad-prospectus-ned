@@ -318,22 +318,25 @@ _response_cache: dict = {}          # key → cached answer string
 _semantic_cache = []                # list of {"query": str, "vector": list, "history_len": int, "answer": str}
 _CACHE_MAX = 512                    # max distinct cached entries
 
-def _cache_key(query: str, history_len: int) -> str:
-    """Cheap cache key: hash of (lowercased query, conversation depth)."""
-    raw = f"{query.strip().lower()}|{history_len}"
+def _cache_key(query: str, chat_history: list) -> str:
+    """Secure cache key: hash of query and serialized conversation history contents."""
+    history_serialized = ""
+    if chat_history:
+        history_serialized = "|".join(f"{msg['role']}:{msg['content']}" for msg in chat_history)
+    raw = f"{query.strip().lower()}|{history_serialized}"
     return _hashlib.md5(raw.encode()).hexdigest()
 
-def _cache_get(query: str, history_len: int):
-    return _response_cache.get(_cache_key(query, history_len))
+def _cache_get(query: str, chat_history: list):
+    return _response_cache.get(_cache_key(query, chat_history))
 
-def _cache_set(query: str, history_len: int, answer: str):
+def _cache_set(query: str, chat_history: list, answer: str):
     if len(_response_cache) >= _CACHE_MAX:
         # Evict oldest entry
         oldest = next(iter(_response_cache))
         _response_cache.pop(oldest, None)
-    _response_cache[_cache_key(query, history_len)] = answer
+    _response_cache[_cache_key(query, chat_history)] = answer
 
-def _cache_get_semantic(query: str, query_vector: list[float], history_len: int, threshold: float = 0.88) -> str:
+def _cache_get_semantic(query: str, query_vector: list[float], chat_history: list, threshold: float = 0.88) -> str:
     """
     Looks up response using semantic similarity.
     Since embeddings are L2 normalized, cosine similarity is just the dot product.
@@ -348,11 +351,15 @@ def _cache_get_semantic(query: str, query_vector: list[float], history_len: int,
     if q_norm > 0:
         q_vec = q_vec / q_norm
         
+    history_serialized = ""
+    if chat_history:
+        history_serialized = "|".join(f"{msg['role']}:{msg['content']}" for msg in chat_history)
+        
     best_score = -1.0
     best_answer = None
     
     for item in _semantic_cache:
-        if item["history_len"] == history_len:
+        if item["history_serialized"] == history_serialized:
             item_vec = np.array(item["vector"])
             item_norm = np.linalg.norm(item_vec)
             if item_norm > 0:
@@ -369,15 +376,20 @@ def _cache_get_semantic(query: str, query_vector: list[float], history_len: int,
         
     return None
 
-def _cache_set_semantic(query: str, query_vector: list[float], history_len: int, answer: str):
+def _cache_set_semantic(query: str, query_vector: list[float], chat_history: list, answer: str):
     if not query_vector or not answer:
         return
     if len(_semantic_cache) >= _CACHE_MAX:
         _semantic_cache.pop(0)
+        
+    history_serialized = ""
+    if chat_history:
+        history_serialized = "|".join(f"{msg['role']}:{msg['content']}" for msg in chat_history)
+        
     _semantic_cache.append({
         "query": query.strip().lower(),
         "vector": query_vector,
-        "history_len": history_len,
+        "history_serialized": history_serialized,
         "answer": answer
     })
 # ---------------------------------------------------------------------------
@@ -585,21 +597,36 @@ rewrite_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """
-You rewrite follow-up user questions into standalone search queries.
+You are an expert query rewriter. Your task is to rewrite a follow-up user question into a single, self-contained standalone search query that preserves the conversation's context.
 
 Rules:
-- Preserve the user's intent.
-- Resolve references such as:
-  - it
-  - this
-  - that
-  - they
-  - same
-  - above
-  - previous
-- Never answer the question.
-- Never invent information.
-- Return ONLY the rewritten standalone query.
+- Resolve all references (e.g., "it", "this", "that", "same", "above", "previous").
+- If the latest message is a continuation (like a department name, e.g., "electronic engineering" or "what about software"), rewrite it to reflect the original question's intent (e.g., "Who is the chairperson of Electronic Engineering?").
+- Do NOT answer the question.
+- Do NOT add search syntax, preamble, explanations, or quotes.
+- Return ONLY the rewritten query.
+
+Examples:
+1.
+Conversation:
+User: Who is the chairman of software engineering?
+Assistant: Prof. Dr. Shehnila Zardari is the chairperson of Software Engineering.
+Latest User Message: What about Computer Science?
+Rewritten Query: Who is the chairperson of the Department of Computer Science?
+
+2.
+Conversation:
+User: What is the eligibility criteria for postgraduate masters?
+Assistant: The candidate must have a relevant undergraduate degree with at least 50% marks.
+Latest User Message: fees?
+Rewritten Query: What is the fee structure for postgraduate masters programs?
+
+3.
+Conversation:
+User: Who is the dean of Civil engineering?
+Assistant: Prof. Dr. S.F.A. Rafeeqi.
+Latest User Message: electronic
+Rewritten Query: Who is the chairperson of the Department of Electronic Engineering?
 """,
         ),
         (
@@ -659,7 +686,7 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
     # -----------------------------------------------------------------------
     # Exact Cache hit: serve identical question instantly without Pinecone / LLM
     # -----------------------------------------------------------------------
-    cached = _cache_get(user_query, len(chat_history))
+    cached = _cache_get(user_query, chat_history)
     if cached:
         print(f"[CACHE HIT] Serving exact cached response for: {user_query[:60]}")
         yield cached
@@ -688,7 +715,7 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
     # Semantic Cache hit: check if there's a semantically similar cached query
     # -----------------------------------------------------------------------
     if query_vector:
-        semantic_cached = _cache_get_semantic(user_query, query_vector, len(chat_history))
+        semantic_cached = _cache_get_semantic(user_query, query_vector, chat_history)
         if semantic_cached:
             yield semantic_cached
             return
@@ -890,6 +917,9 @@ Instructions:
         if is_seat_query:
             system_base += "\n\n11. Focus exclusively on seat distribution and the number of seats. Do NOT mention, list, or summarize any university fees, tuition fees, admission fees, security deposits, or document verification charges, even if they appear in the retrieved context."
 
+        system_base += "\n\n12. **Department Specificity**: If the query asks about a specific department (e.g. 'Electronic Engineering' or 'Computer Science'), you MUST verify that your response corresponds EXACTLY to that department. Do NOT mix or combine names, faculty, or criteria from different departments present in the context."
+        system_base += "\n\n13. **Co-Chairpersons**: If the retrieved context lists both a Chairperson and a Co-Chairperson for the department being queried, you must explicitly state both names in your response (e.g., 'The Chairperson is [Name] and the Co-Chairperson is [Name]'), rather than omitting the Co-Chairperson."
+
     # Limit active history to the last 10 messages (5 turns) to stay well within Groq TPM limits
     recent_history = chat_history[-10:]
     
@@ -916,9 +946,9 @@ Instructions:
             # Cache the full assembled answer for future queries
             if full_response_parts:
                 answer_str = "".join(full_response_parts)
-                _cache_set(user_query, len(chat_history), answer_str)
+                _cache_set(user_query, chat_history, answer_str)
                 if orig_query_vector:
-                    _cache_set_semantic(user_query, orig_query_vector, len(chat_history), answer_str)
+                    _cache_set_semantic(user_query, orig_query_vector, chat_history, answer_str)
             break  # Success — exit retry loop
         except Exception as e:
             err_msg = str(e)
@@ -951,11 +981,18 @@ def needs_query_rewrite(query: str) -> bool:
         "earlier", "former", "latter", "him", "himself", "herself", "themselves"
     }
 
-    # Single-word questions that require context (e.g. "fees", "eligibility")
+    # Single-word questions that require context (e.g. "fees", "eligibility") or department terms
     continuation_keywords = {
         "fee", "fees", "eligibility", "criteria", "requirements", "dean", 
         "syllabus", "courses", "duration", "seats", "seat", "apply", 
-        "admission", "admissions", "cutoff", "merit"
+        "admission", "admissions", "cutoff", "merit",
+        "electronic", "electronics", "computer", "software", "mechanical",
+        "electrical", "civil", "petroleum", "telecommunication", "telecommunications",
+        "biomedical", "industrial", "manufacturing", "textile", "architecture",
+        "automotive", "marine", "materials", "metallurgical", "chemical", "polymer",
+        "math", "mathematics", "physics", "chemistry", "english", "linguistics",
+        "economics", "finance", "environmental", "earthquake", "coastal", "urban",
+        "chairperson", "chairman", "chairwoman", "chair"
     }
 
     tokens = re.findall(r"\w+", query)
@@ -971,12 +1008,16 @@ def needs_query_rewrite(query: str) -> bool:
         return True
 
     # 3. Starts with common follow-up/continuation phrases
-    followup_prefixes = ("what about", "how about", "what of", "how of", "what for", "how for", "and ")
+    followup_prefixes = ("what about", "how about", "what of", "how of", "what for", "how for", "and ", "also ", "then ", "but ")
     if query.startswith(followup_prefixes):
         return True
 
     # 4. Very short queries (1-3 words) that end with a question mark
     if query.endswith("?") and len(tokens) <= 3:
+        return True
+
+    # 5. Short queries (1-3 words) containing continuation/department keywords
+    if len(tokens) <= 3 and any(t in continuation_keywords for t in tokens):
         return True
 
     return False
