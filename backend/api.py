@@ -423,5 +423,3 @@ async def query_chatbot(payload: QueryRequest, current_user = Depends(get_curren
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot logic error: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chatbot logic error: {e}")
