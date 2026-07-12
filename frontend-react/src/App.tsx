@@ -56,6 +56,72 @@ function App() {
     scrollToBottom();
   }, [messages, isGenerating]);
 
+  // Ingestion status checker
+  const checkIngestionStatus = async (level: 'undergraduate' | 'postgraduate') => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_URL}/admin/ingestion-status?academic_level=${level}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'processing') {
+          setIngestStatus('processing');
+          setIngestMsg('Indexing & splitting PDF chunks in background...');
+        } else if (data.status === 'completed') {
+          setIngestStatus('success');
+          setIngestMsg('Ingestion and indexing completed successfully!');
+        } else if (data.status === 'failed') {
+          setIngestStatus('error');
+          setIngestMsg(`Ingestion failed: ${data.error || 'Unknown error'}`);
+        } else {
+          setIngestStatus('idle');
+          setIngestMsg('');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch ingestion status:', err);
+    }
+  };
+
+  // Check status on tab or level change
+  useEffect(() => {
+    if (activeTab === 'ingest' && token) {
+      checkIngestionStatus(academicLevel);
+    }
+  }, [activeTab, academicLevel, token]);
+
+  // Poll status while processing
+  useEffect(() => {
+    let intervalId: any;
+    if (ingestStatus === 'processing' && token) {
+      intervalId = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_URL}/admin/ingestion-status?academic_level=${academicLevel}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.status === 'completed') {
+              setIngestStatus('success');
+              setIngestMsg('Ingestion and indexing completed successfully!');
+              clearInterval(intervalId);
+            } else if (data.status === 'failed') {
+              setIngestStatus('error');
+              setIngestMsg(`Ingestion failed: ${data.error || 'Unknown error'}`);
+              clearInterval(intervalId);
+            }
+          }
+        } catch (err) {
+          console.error('Error polling ingestion status:', err);
+        }
+      }, 3000);
+    }
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [ingestStatus, academicLevel, token]);
+
   // Auth Handlers
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -239,13 +305,7 @@ function App() {
 
       setIngestStatus('processing');
       setIngestMsg('Processing parallel extraction and indexing in backend...');
-      
-      // Since it is async, poll/simulate or keep as processing status
       setUploadFile(null);
-      setTimeout(() => {
-        setIngestStatus('success');
-        setIngestMsg('Prospectus uploaded successfully! Indexing is running in background.');
-      }, 5000);
 
     } catch (err) {
       setIngestStatus('error');
@@ -523,6 +583,7 @@ function App() {
               <div className="form-group">
                 <label>Select Prospectus PDF File</label>
                 <input
+                  key={uploadFile ? 'file-present' : 'file-empty'}
                   type="file"
                   accept=".pdf"
                   onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
@@ -532,12 +593,12 @@ function App() {
               </div>
 
               {ingestStatus === 'uploading' && <div style={{ color: '#f43f5e', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
-              {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ Indexing & splitting PDF chunks in background...</div>}
+              {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ {ingestMsg}</div>}
               {ingestStatus === 'success' && <div style={{ color: '#10b981', fontWeight: 600 }}>✅ {ingestMsg}</div>}
               {ingestStatus === 'error' && <div style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ {ingestMsg}</div>}
 
-              <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading'}>
-                Start Ingestion
+              <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading' || ingestStatus === 'processing'}>
+                {ingestStatus === 'processing' ? 'Ingestion In Progress...' : 'Start Ingestion'}
               </button>
             </form>
           </div>

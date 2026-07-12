@@ -92,9 +92,16 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS prospectus_metadata (
         academic_level VARCHAR(50) PRIMARY KEY,
-        excluded_pages INT[] NOT NULL DEFAULT '{}'::INT[]
+        excluded_pages INT[] NOT NULL DEFAULT '{}'::INT[],
+        ingestion_status VARCHAR(50) DEFAULT 'idle',
+        ingestion_error TEXT
     );
     """)
+    try:
+        cur.execute("ALTER TABLE prospectus_metadata ADD COLUMN IF NOT EXISTS ingestion_status VARCHAR(50) DEFAULT 'idle';")
+        cur.execute("ALTER TABLE prospectus_metadata ADD COLUMN IF NOT EXISTS ingestion_error TEXT;")
+    except Exception as e:
+        print(f"Failed to alter prospectus_metadata table: {e}")
     
     # Check if there is an admin seeded, if not seed a default
     cur.execute("SELECT COUNT(*) FROM users WHERE role = 'ADMIN';")
@@ -142,6 +149,46 @@ def get_prospectus_metadata(level: str) -> list[int]:
         if row:
             return list(row[0])
         return []
+    finally:
+        cur.close()
+        conn.close()
+
+def update_ingestion_status(level: str, status: str, error_msg: str = None):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO prospectus_metadata (academic_level, ingestion_status, ingestion_error)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (academic_level) DO UPDATE SET 
+                ingestion_status = EXCLUDED.ingestion_status,
+                ingestion_error = EXCLUDED.ingestion_error;
+            """,
+            (level, status, error_msg)
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"Error updating ingestion status for {level} to {status}: {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+def get_ingestion_status(level: str) -> dict:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT ingestion_status, ingestion_error FROM prospectus_metadata WHERE academic_level = %s;",
+            (level,)
+        )
+        row = cur.fetchone()
+        if row:
+            return {"status": row[0] or "idle", "error": row[1]}
+        return {"status": "idle", "error": None}
+    except Exception as e:
+        print(f"Error getting ingestion status for {level}: {e}")
+        return {"status": "error", "error": str(e)}
     finally:
         cur.close()
         conn.close()

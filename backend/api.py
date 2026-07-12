@@ -257,14 +257,18 @@ def create_admin(payload: CreateAdminRequest, admin_user = Depends(get_current_a
     return {"message": f"Admin user '{payload.username}' created successfully"}
 
 def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, academic_level: str):
+    from backend.database import update_ingestion_status
     try:
         from core.main import run_parallel_pipeline
 
         print(f"Background Ingestion Started for {academic_level}. Matrix pages: {seat_matrix_pages}")
+        update_ingestion_status(academic_level, "processing")
         asyncio.run(run_parallel_pipeline(pdf_path, seat_matrix_pages, "output_chunks", academic_level=academic_level))
         print(f"Background Ingestion Completed Successfully for {academic_level}!")
+        update_ingestion_status(academic_level, "completed")
     except Exception as e:
         print(f"Background Ingestion Failed for {academic_level}: {e}")
+        update_ingestion_status(academic_level, "failed", str(e))
 
 @app.post("/admin/upload-prospectus")
 def upload_prospectus(
@@ -296,10 +300,11 @@ def upload_prospectus(
             raise HTTPException(status_code=400, detail="excluded_pages must be a comma-separated list of integers")
             
     # Save the configuration to the PostgreSQL database instead of writing code to disk
-    from backend.database import save_prospectus_metadata
+    from backend.database import save_prospectus_metadata, update_ingestion_status
     try:
         save_prospectus_metadata(academic_level, pages_list)
-        print(f"Saved {academic_level} excluded_pages: {pages_list} to PostgreSQL.")
+        update_ingestion_status(academic_level, "processing")
+        print(f"Saved {academic_level} excluded_pages: {pages_list} and set status to processing in PostgreSQL.")
     except Exception as e:
         print(f"Could not save prospectus metadata to database: {e}")
 
@@ -365,6 +370,16 @@ def upload_prospectus(
         "message": f"{academic_level.capitalize()} prospectus uploaded successfully. Ingestion and indexing pipeline started in the background.",
         "excluded_pages_applied": pages_list
     }
+
+
+@app.get("/admin/ingestion-status")
+def get_admin_ingestion_status(academic_level: str = "undergraduate", admin_user = Depends(get_current_admin)):
+    from backend.database import get_ingestion_status
+    academic_level = academic_level.strip().lower()
+    if academic_level not in ("undergraduate", "postgraduate"):
+        raise HTTPException(status_code=400, detail="academic_level must be either 'undergraduate' or 'postgraduate'")
+    
+    return get_ingestion_status(academic_level)
 
 from fastapi.responses import FileResponse
 
