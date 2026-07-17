@@ -354,10 +354,10 @@ function App() {
     return (
       <div className="auth-panel-wrapper">
         <div className="auth-panel-card">
-          <img src="/image.png" alt="NED UET" style={{ height: '72px', width: 'auto', marginBottom: '16px', borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f43f5e', marginBottom: '4px' }}>NED Prospectus AI</h2>
+          <img src="/image.png" alt="University Logo" style={{ height: '72px', width: 'auto', marginBottom: '16px', borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f43f5e', marginBottom: '4px' }}>Prospectus AI</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
-            Official Academic RAG Assistant for NED University
+            Official Academic RAG Assistant
           </p>
 
           <div className="auth-tab-row">
@@ -415,7 +415,7 @@ function App() {
       {/* Sidebar Panel */}
       <div className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
         <div className="sidebar-header">
-          <img src="/image.png" alt="NED UET" className="sidebar-logo" style={{ borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/image.png" alt="University Logo" className="sidebar-logo" style={{ borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <span className="sidebar-title">Prospectus AI</span>
         </div>
 
@@ -474,10 +474,10 @@ function App() {
               {messages.length === 0 ? (
                 /* Welcome Centered Screen matching ChatGPT */
                 <div className="welcome-container">
-                  <img src="/image.png" alt="NED UET Logo" className="welcome-logo" style={{ height: '80px', width: 'auto', borderRadius: '50%', marginBottom: '24px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                  <h1 className="welcome-title">Welcome to NED Prospectus AI</h1>
+                  <img src="/image.png" alt="University Logo" className="welcome-logo" style={{ height: '80px', width: 'auto', borderRadius: '50%', marginBottom: '24px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                  <h1 className="welcome-title">Welcome to Prospectus AI</h1>
                   <p className="welcome-subtitle" style={{ maxWidth: '600px', margin: '0 auto', fontSize: '1.15rem', lineHeight: '1.7' }}>
-                    Your official academic guide for NED University of Engineering & Technology. 
+                    Your official academic guide. 
                     Ask any questions about undergraduate or postgraduate admissions, eligibility criteria, department seats, 
                     course selections, or application procedures to begin your journey.
                   </p>

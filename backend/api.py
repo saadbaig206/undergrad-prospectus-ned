@@ -39,14 +39,13 @@ async def keep_pinecone_alive_loop():
     """Background loop to periodically query Pinecone, keeping the connection pool and serverless instance warm."""
     await asyncio.sleep(3)
     try:
-        from core.chatbot import get_pinecone_index
+        from core.retrieval.pinecone_retriever import get_pinecone_index
         index = get_pinecone_index()
         dim = int(os.getenv("EMBEDDING_DIMENSION", "384"))
         while True:
             try:
-                await asyncio.to_thread(
-                    index.query,
-                    vector=[0.0] * dim,
+                await index.query(
+                    vector=[0.0] * 384,
                     top_k=1
                 )
             except Exception:
@@ -69,23 +68,32 @@ async def startup_event():
         
     # Pre-warm AI and database clients to cut down first-query latency from 3s to under 1s
     try:
-        from core.chatbot import get_llm, get_pinecone_index
+        from core.chatbot import get_llm
+        from core.retrieval.pinecone_retriever import get_pinecone_index
         from core.embeddings import get_embeddings_model
-        get_embeddings_model()
+        embed_model = get_embeddings_model()
+        embed_model.embed_query("warmup query")
         get_llm()
         
         # Warm up the Pinecone connection pool by running a lightweight query (384 dim vector)
         try:
+            from core.retrieval.bm25 import get_bm25_instance
+            get_bm25_instance("undergraduate")
+            get_bm25_instance("postgraduate")
+            print("[BM25] Local instances loaded successfully!")
+        except Exception as bm25_err:
+            print(f"[BM25] Warming warning: {bm25_err}")
+
+        try:
             index = get_pinecone_index()
             dim = int(os.getenv("EMBEDDING_DIMENSION", "384"))
-            await asyncio.to_thread(
-                index.query,
+            await index.query(
                 vector=[0.0] * dim,
                 top_k=1
             )
-            print("🔍 [PINECONE] gRPC channel warming completed successfully!")
+            print("[PINECONE] Connection warming completed successfully!")
         except Exception as pe:
-            print(f"🔍 [PINECONE] gRPC pool warming warning: {pe}")
+            print(f"[PINECONE] Connection pool warming warning: {pe}")
         print("Pre-warming of Embeddings, Pinecone, and LLM clients completed successfully!")
     except Exception as e:
         print(f"Pre-warming warning: {e}")
@@ -256,14 +264,16 @@ def create_admin(payload: CreateAdminRequest, admin_user = Depends(get_current_a
         
     return {"message": f"Admin user '{payload.username}' created successfully"}
 
-def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, academic_level: str):
+async def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, academic_level: str):
     from backend.database import update_ingestion_status
     try:
-        from core.main import run_parallel_pipeline
+        from core.ingestion.ingestion_service import ingest_prospectus
 
         print(f"Background Ingestion Started for {academic_level}. Matrix pages: {seat_matrix_pages}")
         update_ingestion_status(academic_level, "processing")
-        asyncio.run(run_parallel_pipeline(pdf_path, seat_matrix_pages, "output_chunks", academic_level=academic_level))
+        res = await ingest_prospectus(pdf_path, academic_level, 2026, "seat_distribution.pdf")
+        if not res.success:
+            raise Exception(res.message)
         print(f"Background Ingestion Completed Successfully for {academic_level}!")
         update_ingestion_status(academic_level, "completed")
     except Exception as e:

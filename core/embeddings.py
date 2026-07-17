@@ -138,7 +138,7 @@ def get_embeddings_model():
                 # Load configuration
                 from dotenv import load_dotenv
                 load_dotenv()
-                model_name = os.getenv("EMBEDDING_MODEL_NAME", "onnx-community/NoInstruct-small-Embedding-v0-ONNX")
+                model_name = os.getenv("EMBEDDING_MODEL_NAME", "Xenova/bge-small-en-v1.5")
                 _model_instance = ONNXEmbeddings(model_name)
     return _model_instance
 

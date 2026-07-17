@@ -107,27 +107,24 @@ class IntentDetector:
         if any(w in words for w in strong_indicators):
             return "SEAT"
 
-        keyword = self.keyword_score(query)
+        rag_indicators = {"chairperson", "chairman", "chair", "cochairperson", "head", "dean", "director", "professor", "department", "dept", "engineering", "science", "fees", "fee", "eligibility", "eligible", "admission", "admissions", "civil", "mechanical", "electrical", "software", "computer"}
+        if any(w in words for w in rag_indicators):
+            return "RAG"
 
+        keyword = self.keyword_score(query)
         regex = self.regex_score(query)
 
         seat_sim, general_sim = self.semantic_score(query, query_vector=query_vector)
 
         final_seat = (
-
             keyword * 0.25 +
-
             regex * 0.25 +
-
             seat_sim * 0.50
-
         )
         if final_seat > 0.72:
-
             return "SEAT"
 
         if general_sim > 0.82:
-
             return "GENERAL"
 
         return "RAG"

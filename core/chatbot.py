@@ -2,7 +2,7 @@ import os
 import sys
 from functools import lru_cache
 from dotenv import load_dotenv
-from pinecone.grpc import PineconeGRPC as Pinecone
+from pinecone import Pinecone
 from core.intent_detector import IntentDetector
 import asyncio
 import httpx
@@ -143,113 +143,7 @@ def get_bm25_instance(academic_level: str):
             return None
     return _bm25_instances.get(academic_level)
 
-def hybrid_search_rrf(semantic_results: list, keyword_results: list, top_k: int = 15) -> list:
-    """
-    Applies Reciprocal Rank Fusion (RRF) to merge semantic (Pinecone matches) 
-    and keyword (BM25 dict chunks) search results.
-    """
-    rrf_scores = {}
-    
-    # 1. Parse Pinecone semantic matches
-    for rank, match in enumerate(semantic_results):
-        page = match.metadata.get("source_page", "Unknown")
-        text = match.metadata.get("text", "")
-        level = match.metadata.get("academic_level", "unknown")
-        key = (page, text[:120])
-        
-        if key not in rrf_scores:
-            rrf_scores[key] = {
-                "rank_sem": rank, 
-                "rank_key": None, 
-                "source_page": page, 
-                "text": text,
-                "academic_level": level
-            }
-        else:
-            rrf_scores[key]["rank_sem"] = rank
-            
-    # 2. Parse BM25 keyword matches
-    for rank, chunk in enumerate(keyword_results):
-        page = chunk.get("source_page", "Unknown")
-        text = chunk.get("text", "")
-        level = chunk.get("academic_level", "unknown")
-        key = (page, text[:120])
-        
-        if key not in rrf_scores:
-            rrf_scores[key] = {
-                "rank_sem": None, 
-                "rank_key": rank, 
-                "source_page": page, 
-                "text": text,
-                "academic_level": level
-            }
-        else:
-            rrf_scores[key]["rank_key"] = rank
-            
-    # 3. Compute RRF Scores
-    fused_results = []
-    for item in rrf_scores.values():
-        score = 0.0
-        if item["rank_sem"] is not None:
-            score += 1.0 / (60.0 + item["rank_sem"])
-        if item["rank_key"] is not None:
-            score += 1.0 / (60.0 + item["rank_key"])
-            
-        item["rrf_score"] = score
-        fused_results.append((score, item))
-        
-    fused_results.sort(key=lambda x: x[0], reverse=True)
-    return [item[1] for item in fused_results[:top_k]]
 
-def rerank_chunks(query: str, query_vector: list[float], candidate_chunks: list, top_k: int = 5) -> list:
-    """
-    Reranks candidate chunks instantly on CPU using RRF rank fusion scores, 
-    token overlap (Jaccard similarity), and alphanumeric code matching boosts,
-    avoiding slow CPU-bound ONNX model document embeddings.
-    """
-    if not candidate_chunks:
-        return []
-        
-    q_tokens = set(normalize_token(t) for t in re.findall(r"\w+", query.lower()))
-    
-    # Alphanumeric uppercase terms in query (like course codes or department names)
-    special_terms = re.findall(r"\b[A-Z0-9\-]{2,10}\b", query)
-    
-    reranked = []
-    for chunk in candidate_chunks:
-        text = chunk["text"]
-        
-        # 1. Base score from RRF Rank Fusion
-        rrf_score = chunk.get("rrf_score", 0.0)
-        
-        # 2. Token overlap score (Jaccard similarity)
-        c_tokens = set(normalize_token(t) for t in re.findall(r"\w+", text.lower()))
-        jaccard_score = 0.0
-        if q_tokens and c_tokens:
-            intersection = q_tokens.intersection(c_tokens)
-            union = q_tokens.union(c_tokens)
-            jaccard_score = len(intersection) / len(union) if union else 0.0
-            
-        # 3. Special keyword boost (exact match on codes/acronyms)
-        boost = 1.0
-        for term in special_terms:
-            if re.search(r"\b" + re.escape(term.lower()) + r"\b", text.lower()):
-                boost = 1.3
-                break
-                
-        # 4. Department name boost (if query specifies department name and chunk matches it exactly)
-        depts = ["electronic engineering", "computer science", "software engineering", "civil engineering", "mechanical engineering", "electrical engineering", "biomedical engineering", "telecommunications engineering"]
-        for dept in depts:
-            if dept in query.lower() and dept in text.lower():
-                boost *= 1.5
-                break
-                
-        # Combined reranking score
-        final_score = (0.7 * rrf_score + 0.3 * jaccard_score) * boost
-        reranked.append((final_score, chunk))
-        
-    reranked.sort(key=lambda x: x[0], reverse=True)
-    return [item[1] for item in reranked[:top_k]]
 # ---------------------------------------------------------------------------
 
 load_dotenv()
@@ -270,32 +164,15 @@ def expand_query_abbreviations(query: str) -> str:
     if not query:
         return query
     
-    # Common NED department abbreviations to full names
-    abbreviations = {
-        "eld": "Electronic Engineering",
-        "el": "Electronic Engineering",
-        "cis": "Computer & Information Systems Engineering",
-        "cid": "Computer & Information Systems Engineering",
-        "cs": "Computer Science",
-        "se": "Software Engineering",
-        "me": "Mechanical Engineering",
-        "ee": "Electrical Engineering",
-        "ce": "Civil Engineering",
-        "pe": "Petroleum Engineering",
-        "te": "Telecommunications Engineering",
-        "be": "Biomedical Engineering",
-        "bme": "Biomedical Engineering",
-        "im": "Industrial & Manufacturing Engineering",
-        "tx": "Textile Engineering",
-        "ar": "Architecture",
-        "arch": "Architecture",
-    }
+    # Generic version: no hardcoded abbreviations
+    abbreviations = {}
     
     import re
     expanded = query
     for abbrev, full_name in abbreviations.items():
         # Match only full words (case-insensitive)
-        pattern = r"\b" + re.escape(abbrev) + r"\b"
+        # Add negative lookahead to prevent expanding course codes (e.g., CS-301, CS 301)
+        pattern = r"\b" + re.escape(abbrev) + r"\b(?!\s*-?\s*\d)"
         expanded = re.sub(pattern, full_name, expanded, flags=re.IGNORECASE)
     return expanded
 
@@ -314,9 +191,44 @@ _global_httpx_client = None
 import numpy as np
 import hashlib as _hashlib
 
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output_chunks")
+_RESPONSE_CACHE_PATH = os.path.join(_CACHE_DIR, "response_cache.json")
+_SEMANTIC_CACHE_PATH = os.path.join(_CACHE_DIR, "semantic_cache.json")
+
 _response_cache: dict = {}          # key → cached answer string
 _semantic_cache = []                # list of {"query": str, "vector": list, "history_len": int, "answer": str}
 _CACHE_MAX = 512                    # max distinct cached entries
+
+def _load_persistent_caches():
+    global _response_cache, _semantic_cache
+    try:
+        if os.path.exists(_RESPONSE_CACHE_PATH):
+            with open(_RESPONSE_CACHE_PATH, "r", encoding="utf-8") as f:
+                _response_cache = json.load(f)
+        if os.path.exists(_SEMANTIC_CACHE_PATH):
+            with open(_SEMANTIC_CACHE_PATH, "r", encoding="utf-8") as f:
+                _semantic_cache = json.load(f)
+    except Exception as e:
+        print(f"[CACHE] Error loading persistent cache: {e}")
+
+def _save_response_cache():
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_RESPONSE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_response_cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[CACHE] Error saving response cache: {e}")
+
+def _save_semantic_cache():
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_SEMANTIC_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_semantic_cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[CACHE] Error saving semantic cache: {e}")
+
+# Load persistent caches immediately
+_load_persistent_caches()
 
 def _cache_key(query: str, chat_history: list) -> str:
     """Secure cache key: hash of query and serialized conversation history contents."""
@@ -335,6 +247,7 @@ def _cache_set(query: str, chat_history: list, answer: str):
         oldest = next(iter(_response_cache))
         _response_cache.pop(oldest, None)
     _response_cache[_cache_key(query, chat_history)] = answer
+    _save_response_cache()
 
 def _cache_get_semantic(query: str, query_vector: list[float], chat_history: list, threshold: float = 0.88) -> str:
     """
@@ -392,19 +305,8 @@ def _cache_set_semantic(query: str, query_vector: list[float], chat_history: lis
         "history_serialized": history_serialized,
         "answer": answer
     })
+    _save_semantic_cache()
 # ---------------------------------------------------------------------------
-_pinecone_index = None
-_pinecone_lock = threading.Lock()
-
-def get_pinecone_index():
-    global _pinecone_index
-    if _pinecone_index is None:
-        with _pinecone_lock:
-            if _pinecone_index is None:
-                api_key = os.getenv("PINECONE_API_KEY")
-                pc = Pinecone(api_key=api_key)
-                _pinecone_index = pc.Index("rag-chatbot-index")
-    return _pinecone_index
 
 def get_global_httpx_client():
     global _global_httpx_client
@@ -486,35 +388,8 @@ def get_fast_llm():
     return langchain_fast_llm
 
 def get_pinecone_index():
-    global pinecone_client
-    global pinecone_index
-
-    if pinecone_index is None:
-        print("[PINECONE] Initializing Pinecone Index client...")
-        api_key = os.getenv("PINECONE_API_KEY")
-
-        if not api_key:
-            raise RuntimeError("PINECONE_API_KEY not configured.")
-
-        if pinecone_client is None:
-            pinecone_client = Pinecone(api_key=api_key)
-
-        host = os.getenv("PINECONE_INDEX_HOST")
-        if host:
-            print(f"[PINECONE] Initializing Index client using direct host: {host}")
-            pinecone_index = pinecone_client.Index(
-                PINECONE_INDEX_NAME,
-                host=host
-            )
-        else:
-            print("[PINECONE] PINECONE_INDEX_HOST not set. Index host will be resolved via control plane API call.")
-            pinecone_index = pinecone_client.Index(
-                PINECONE_INDEX_NAME
-            )
-    else:
-        print("[PINECONE] Reusing existing Pinecone Index client.")
-
-    return pinecone_index
+    from core.retrieval.pinecone_retriever import get_pinecone_index as _get
+    return _get()
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -695,40 +570,46 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
     
     t0 = time.time()
     expanded_user_query = expand_query_abbreviations(user_query)
+    
+    condense_task = None
     if chat_history and needs_query_rewrite(expanded_user_query):
-        standalone_query = await condense_query(chat_history, expanded_user_query)
-        print(f"[LATENCY] Query Rewrite: {time.time() - t0:.4f}s")
-    else:
-        standalone_query = expanded_user_query
-        print("[LATENCY] Query Rewrite: Skipped")
+        condense_task = asyncio.create_task(condense_query(chat_history, expanded_user_query))
+        
     t1 = time.time()
     try:
-        query_vector = cached_embedding(standalone_query)
-        orig_query_vector = query_vector
-        print(f"[LATENCY] Embedding Generation: {time.time() - t1:.4f}s")
+        query_vector_raw = await asyncio.to_thread(cached_embedding, expanded_user_query)
+        orig_query_vector = query_vector_raw
     except Exception as e:
-        print(f"Embedding generation failed: {e}")
-        query_vector = None
+        print(f"Embedding failed: {e}")
+        query_vector_raw = None
         orig_query_vector = None
         
-    # -----------------------------------------------------------------------
+    t2 = time.time()
+    try:
+        intent = intent_detector.classify(expanded_user_query, query_vector=query_vector_raw)
+    except Exception as e:
+        intent = "RAG"
+    print(f"[LATENCY] Parallel Embed + Intent: {time.time() - t1:.4f}s")
+    
     # Semantic Cache hit: check if there's a semantically similar cached query
-    # -----------------------------------------------------------------------
-    if query_vector:
-        semantic_cached = _cache_get_semantic(user_query, query_vector, chat_history)
+    if query_vector_raw:
+        semantic_cached = _cache_get_semantic(user_query, query_vector_raw, chat_history)
         if semantic_cached:
+            if condense_task:
+                condense_task.cancel()
             yield semantic_cached
             return
-    # -----------------------------------------------------------------------
-        
-    t2 = time.time()
-    intent = intent_detector.classify(standalone_query, query_vector=query_vector)
-    print(f"[LATENCY] Intent Classification: {time.time() - t2:.4f}s")
-    
+            
     if intent == "SEAT":
+        if condense_task:
+            condense_task.cancel()
         is_seat_query = True
         import re
-        query_lower = standalone_query.lower()
+        query_lower = expanded_user_query.lower()
+        if chat_history:
+            for msg in reversed(chat_history[-4:]):
+                query_lower += " " + msg.get("content", "").lower()
+
         pg_patterns = [
             r"\bpostgrad\b", r"\bpostgraduate\b", r"\bmasters?\b", r"\bphd\b", r"\bph\.d\b",
             r"\bms\b", r"\bm\.e\.\b", r"\bm\.s\.\b", r"\bm\.c\.s\.\b", r"\bdoctorate\b",
@@ -742,53 +623,43 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
         is_ug = any(re.search(pat, query_lower) for pat in ug_patterns)
         
         if is_pg and not is_ug:
-            yield "There is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes at NED University are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
+            yield "There is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
             return
         elif is_ug and not is_pg:
             yield f"For the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
             return
         else:
-            # Ambiguous or both: show undergraduate PDF first, then explain the postgraduate policy
             yield f"### Undergraduate\nFor the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
-            yield "### Postgraduate / Masters\nThere is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes at NED University are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
+            yield "### Postgraduate / Masters\nThere is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
             return
         
     if intent == "GENERAL":
-        system_base = "You are Prospectus AI, the official academic assistant for NED University. Answer the user's query directly and helpfully. Always identify yourself as Prospectus AI. Do NOT include page citations, references, or source details. Do NOT answer specific academic, admission, course, or department queries using external knowledge. For general info, know that: (1) The current Vice-Chancellor is Prof. Dr. Muhammad Tufail, (2) The main campus is on University Road, Karachi - 75270. If asked about any other university facts, history, programs, or details, politely state that you can only answer from the official records and guide the user to ask their specific question so you can look it up in the prospectus."
+        if condense_task:
+            condense_task.cancel()
+        system_base = "You are Prospectus AI, the official academic assistant for the University. Answer the user's query directly and helpfully. Always identify yourself as Prospectus AI. Do NOT include page citations, references, or source details. Do NOT answer specific academic, admission, course, or department queries using external knowledge. If asked about any other university facts, history, programs, or details, politely state that you can only answer from the official records and guide the user to ask their specific question so you can look it up in the prospectus. CRITICAL: Never explicitly mention any specific university name (such as 'NED University', 'NED', 'NEDUET') in your responses. Always use the generic term 'the University' instead."
+        standalone_query = expanded_user_query
     else: # RAG
+        if condense_task:
+            try:
+                standalone_query = await condense_task
+                print(f"[LATENCY] Query Rewrite finished: {time.time() - t0:.4f}s")
+            except Exception as e:
+                print(f"Query rewrite failed: {e}")
+                standalone_query = expanded_user_query
+                
+            try:
+                query_vector = await asyncio.to_thread(cached_embedding, standalone_query)
+            except Exception:
+                query_vector = None
+        else:
+            standalone_query = expanded_user_query
+            query_vector = query_vector_raw
         t3 = time.time()
         try:
             import re
             query_lower = standalone_query.lower()
             
-            # Check if this RAG query is asking what NED stands for or about its history
-            stands_for_patterns = [
-                r"\bned\b.*\bstands?\b",
-                r"\bstands?\b.*\bned\b",
-                r"\bfull\b.*\bform\b.*\bned\b",
-                r"\bned\b.*\bfull\b.*\bform\b",
-                r"\bwhat\b.*\bned\b.*\bmean\b",
-                r"\bwhat\b.*\bdoes\b.*\bned\b.*\bstand\b",
-                r"\bmeaning\b.*\bned\b",
-                r"\bname\b.*\bned\b.*\bstands?\b",
-                r"\borigin\b.*\bned\b.*\bname\b",
-                r"\bwhy\b.*\bcalled\b.*\bned\b",
-                r"\bwho\b.*\bned\b.*\bnamed\b",
-                r"\bhistory\b",
-                r"\bhistorical\b",
-                r"\borigin\b",
-                r"\bestablished\b",
-                r"\bfounded\b",
-                r"\bbackground\b",
-                r"\babbreviation\b",
-                r"\bstands?\b"
-            ]
-            if any(re.search(pat, query_lower) for pat in stands_for_patterns):
-                search_query = "historical background of NED University"
-                print(f"[DEBUG] Query asks what NED stands for / history. Rewriting search query to: {search_query}")
-                query_vector = cached_embedding(search_query)
-            else:
-                search_query = standalone_query
+            search_query = standalone_query
             pg_patterns = [
                 r"\bpostgrad", r"\bpostgraduate\b", r"\bmasters?\b", r"\bphd\b", r"\bph\.d\b",
                 r"\bms\b", r"\bm\.e\.\b", r"\bm\.s\.\b", r"\bm\.c\.s\.\b", r"\bdoctorate\b",
@@ -828,62 +699,27 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
                 query_vector = cached_embedding(search_query)
                 print(f"[DEBUG] Late-binding embedding generation: {time.time() - t_embed:.4f}s")
             
-            # --- HYBRID RETRIEVAL & RERANKING ---
+            # --- HYBRID RETRIEVAL & RERANKING via core.retrieval.retriever ---
             t_query = time.time()
+            from core.retrieval.retriever import retrieve
             
-            # 1. Semantic query to Pinecone (retrieve top PINECONE_TOP_K matches)
-            index = get_pinecone_index()
-            response = await asyncio.to_thread(
-                index.query,
-                vector=query_vector,
-                top_k=PINECONE_TOP_K,
-                include_metadata=True,
-                filter=filter_dict if filter_dict else None
+            print(f"[DEBUG] Invoking advanced retrieval engine...")
+            retrieval_res = await retrieve(
+                query=standalone_query,
+                query_vector=query_vector,
+                academic_level_filter=filter_dict if filter_dict else None,
+                is_ug=is_ug,
+                is_pg=is_pg
             )
-            semantic_matches = response.matches
-            print(f"[DEBUG] Raw gRPC Pinecone query execution: {time.time() - t_query:.4f}s")
-            
-            # 2. Keyword query to Local BM25 (retrieve top PINECONE_TOP_K matches)
-            keyword_matches = []
-            if is_pg or (not is_pg and not is_ug):
-                bm25_pg = get_bm25_instance("postgraduate")
-                if bm25_pg:
-                    keyword_matches.extend(bm25_pg.score(standalone_query, top_k=PINECONE_TOP_K))
-            if is_ug or (not is_pg and not is_ug):
-                bm25_ug = get_bm25_instance("undergraduate")
-                if bm25_ug:
-                    keyword_matches.extend(bm25_ug.score(standalone_query, top_k=PINECONE_TOP_K))
-                    
-            # 3. Fuse lists using Reciprocal Rank Fusion (RRF) (candidate list of 15 items)
-            fused_candidates = hybrid_search_rrf(semantic_matches, keyword_matches, top_k=15)
-            print(f"[DEBUG] Hybrid Search fused {len(fused_candidates)} candidate chunks.")
-            
-            # 4. Apply Hybrid Scorer Reranking (rerank down to top 5 chunks)
-            top_reranked_chunks = rerank_chunks(standalone_query, query_vector, fused_candidates, top_k=5)
-            print(f"[DEBUG] Cross-Encoder Reranking completed in {time.time() - t_query:.4f}s.")
-            
-            # 5. Build final context block
-            context_chunks = []
-            for chunk in top_reranked_chunks:
-                page = chunk.get("source_page", "Unknown")
-                try:
-                    if isinstance(page, (int, float)):
-                        page = int(page)
-                except Exception:
-                    pass
-                level = chunk.get("academic_level", "unknown")
-                doc_name = "UG Prospectus" if level == "undergraduate" else "PG Prospectus"
-                context_chunks.append(f"[Source: {doc_name}, Page {page}]\n{chunk['text']}")
-                
-            context = "\n---\n\n".join(context_chunks)
-            print(f"[LATENCY] Pinecone Retrieval, Hybrid Search & Reranking: {time.time() - t3:.4f}s")
+            context = retrieval_res.get("context", "No context available.")
+            print(f"[LATENCY] Advanced Retrieval Pipeline: {time.time() - t_query:.4f}s")
         except Exception as e:
             print(f"Pinecone retrieval failed: {e}")
             context = "No context available."
 
-        system_base = f"""You are Prospectus AI, the official academic assistant for NED University.
+        system_base = f"""You are Prospectus AI, the official academic assistant for the University.
  
-Your task is to answer the user's question accurately, politely, and clearly using ONLY the retrieved prospectus context. Do NOT use any pre-trained or external knowledge about NED University.
+Your task is to answer the user's question accurately, politely, and clearly using ONLY the retrieved prospectus context. Do NOT use any pre-trained or external knowledge about the University.
  
 Retrieved Context:
 {context}
@@ -892,17 +728,20 @@ Instructions:
  
 1. **Tone & Style**: Maintain a warm, welcoming, professional, and helpful tone. Speak directly as the voice of the university. Answer the user's question directly and naturally. Do NOT begin with robotic introductory phrases like "Based on the retrieved context...", "The prospectus says...", or "According to the document...". Instead, write directly: "The Chairperson of the Department of Electronic Engineering is Prof. Dr. Sadia Muniza Faraz."
  
-2. **Proper Citations**: Every statement of fact, number, criterion, name, or seat count derived from the context must be immediately followed by a proper citation in parentheses specifying the source document and page number (e.g., `(UG Prospectus, Page 20)` or `(PG Prospectus, Page 15)`). Place the citation directly at the end of the sentence or clause before punctuation. Never invent or make up page numbers; use exactly the source and page provided in the chunk headers. Keep citations clean, standardized, and professional.
- 
+2. **Proper Citations**: You must cite your sources seamlessly. For general text, append `(UG Prospectus, Page X)` at the end of the relevant sentence. For data presented in tables or lists, place the citation clearly in a dedicated "Source" column or at the bottom of the table to avoid repetitive clutter. Never invent page numbers.
+
 3. **Handling Missing Details / Out-of-Scope Queries (Strict Knowledge Limitation)**:
-   - You must answer using ONLY the provided Retrieved Context and the specific General University Facts listed in Instruction 10. Do NOT use any pre-trained or external knowledge about NED University, its history, founder, name origin, programs, courses, fees, administration, faculty, locations, admission criteria, or any other university-related detail.
-   - If the context does not contain enough details (and the answer is not in General University Facts), warmly guide the user to the right contact or website: *"For detailed and up-to-date information on this topic, I recommend visiting the official NED University website at neduet.edu.pk or contacting the department directly — the team there will be happy to assist you!"* Do NOT try to answer using your external knowledge or make up facts.
+   - You must answer using ONLY the provided Retrieved Context. Do NOT use any pre-trained or external knowledge about the University. Rely strictly on the retrieved context for details like programs, courses, fees, administration, faculty, locations, admission criteria, etc.
+   - If the context does not contain enough details, warmly guide the user to the right contact or website: *"For detailed and up-to-date information on this topic, I recommend visiting the official University website or contacting the department directly — the team there will be happy to assist you!"* Do NOT try to answer using your external knowledge or make up facts.
    - Avoid negative, robotic, or dry phrases like "I couldn't find...", "No information available", "Not mentioned", or similar denials.
-   - If the query is completely unrelated to NED University, admissions, or academics, politely say: *"I am your NED University Academic Assistant. I can help you with admissions, seat distribution, department chairpersons, and general prospectus details. Please let me know how I can assist you with university inquiries!"* and do NOT answer the unrelated question. Under no circumstances should you generate code, write general programming solutions, or provide answers to non-university topics. Stop immediately after the polite redirection.
+   - If the query is completely unrelated to the University, admissions, or academics, politely say: *"I am your University Academic Assistant. I can help you with admissions, seat distribution, department chairpersons, and general prospectus details. Please let me know how I can assist you with university inquiries!"* and do NOT answer the unrelated question. Under no circumstances should you generate code, write general programming solutions, or provide answers to non-university topics. Stop immediately after the polite redirection.
  
 4. **Accuracy**: Copy all numerical values, percentages, and names exactly. Never make assumptions, estimate, or invent facts.
  
-5. **Formatting**: Use clean markdown structure, bold text for headers/names, and bullet points for lists to make answers highly readable and visually professional. If the context has a table, preserve it as a markdown table.
+5. **Formatting**: Your answers must be incredibly clean and visually professional.
+   - If the retrieved context contains structured data (like course codes, credit hours, seat distributions, or fee structures), **you MUST present it as a Markdown table** (e.g., `| Course Code | Title | Credit Hours | Source |`). 
+   - Never output repetitive, dense, or raw lists of courses/fees.
+   - Use bold text for key names, headers, and emphasis.
  
 6. **Academic Levels**: If context contains details for both undergraduate and postgraduate levels, you MUST separate your answer into distinct sections with clear headings (e.g. "### Undergraduate" and "### Postgraduate"). Never blend or mix details from different levels into a single list or sentence.
  
@@ -911,8 +750,8 @@ Instructions:
 8. **Ambiguity**: If the question is ambiguous, ask a brief clarification politely instead of guessing.
  
 9. **Evergreen & Professional**: Keep responses professional, concise, and evergreen. Speak about programs and rules directly rather than referencing the source document as a paper file, but still include the required parenthetical source citations (e.g., `(UG Prospectus, Page 20)`).
- 
-10. **General University Facts**: The current Vice-Chancellor of NED University of Engineering and Technology is Prof. Dr. Muhammad Tufail. The main campus is located on University Road, Karachi - 75270. The Registrar Main Campus contact details are registrar@neduet.edu.pk, Tel: +92-21-99261261-8, Fax: +92-21-99261255."""
+
+10. **Generic Naming**: NEVER explicitly mention any specific university name (such as "NED University", "NED", "NEDUET", etc.) in your responses. Always use the generic term "the University" instead."""
         
         if is_seat_query:
             system_base += "\n\n11. Focus exclusively on seat distribution and the number of seats. Do NOT mention, list, or summarize any university fees, tuition fees, admission fees, security deposits, or document verification charges, even if they appear in the retrieved context."
@@ -942,7 +781,11 @@ Instructions:
                 content = chunk.content
                 if content:
                     full_response_parts.append(content)
-                    yield content
+                    # Force a buttery smooth typewriter effect even if Groq returns massive chunks
+                    chunk_size = 2
+                    for i in range(0, len(content), chunk_size):
+                        yield content[i:i+chunk_size]
+                        await asyncio.sleep(0.01)
             # Cache the full assembled answer for future queries
             if full_response_parts:
                 answer_str = "".join(full_response_parts)
