@@ -21,6 +21,7 @@ async def retrieve(
     academic_level_filter: dict | None = None,
     is_ug: bool = False,
     is_pg: bool = False,
+    use_pg_knowledge: bool = True,
 ) -> dict:
 
     # ----------------------------------------
@@ -98,7 +99,7 @@ async def retrieve(
 
     bm25_tasks = []
 
-    if is_pg or (not is_pg and not is_ug):
+    if use_pg_knowledge and (is_pg or (not is_pg and not is_ug)):
 
         bm25_tasks.append(
             asyncio.create_task(
@@ -313,4 +314,4 @@ async def retrieve(
 
     return {
         "context": context
-    }
+}

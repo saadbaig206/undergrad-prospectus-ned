@@ -32,11 +32,11 @@ FACULTY_ROW = re.compile(
 
 COURSE_ROW = re.compile(
     r"""
-    (?P<code>[A-Z]{2,5}\s*-?\s*\d{2,4})            # Matches CS101, CS 101, CS-101, etc.
+    (?P<code>[A-Z]{2,5}\s*-?\s*\d{2,4})            
     .{1,100}?
     (?P<title>.{1,100}?)
     .{1,50}?
-    (?P<credits>\d-\d-\d|NC-NC-NC|\d\s*\(\s*\d\s*,\s*\d\s*\)) # Tolerates complex credit definitions
+    (?P<credits>\d-\d-\d|NC-NC-NC|\d\s*\(\s*\d\s*,\s*\d\s*\)) 
     """,
     re.X | re.I,
 )
@@ -44,7 +44,7 @@ COURSE_ROW = re.compile(
 FEE_ROW = re.compile(
     r"""
     (?P<fee>.{1,100}?)
-    (?:Rs\.?|PKR|Rupees|RS)                        # Forgiving currency matching
+    (?:Rs\.?|PKR|Rupees|RS)                        
     \s*
     (?P<amount>[0-9,]{1,20})
     """,

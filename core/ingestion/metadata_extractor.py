@@ -22,8 +22,8 @@ class MetadataContext:
 # ============================================================
 PAGE_RE = re.compile(r"^##\s*Page\s*(\d+)", re.M)
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.M)
-SEMESTER_RE = re.compile(r"semester\s*([1-8])", re.I)
-COURSE_RE = re.compile(r"[A-Z]{2,5}\s*-?\s*\d{2,4}", re.I)
+SEMESTER_RE = re.compile(r"semester\s*[-:=]?\s*(\d+)", re.I)
+COURSE_RE = re.compile(r"\b[A-Z]{2,5}\s*-?\s*\d{2,4}\b")
 
 # Flexible designators that match any department or faculty title format
 FACULTY_RE = re.compile(r"(?:Faculty\s+of\s+|School\s+of\s+|College\s+of\s+)([^\n#]+)", re.I)
@@ -55,7 +55,7 @@ SECTIONS = {
     "eligibility": ["eligibility", "criteria", "requirements", "admission criteria"],
     "scholarships": ["scholarship", "financial aid", "assistance", "bursary"],
     "laboratories": ["laboratory", "lab", "facilities", "workshop"],
-    "admission": ["admission", "apply", "application", "prospectus", "intake", "deadline"]
+    "admission": ["admission", "apply", "application", "prospectus", "intake", "deadline", "merit", "aggregate", "seat", "seats", "allocation", "quota"]
 }
 
 # Generic Content Classifier
@@ -163,6 +163,7 @@ def build_metadata(section: str, ctx: MetadataContext, academic_level: str, year
         "person_name": p_match.group().strip() if p_match else None,
         "designation": des_match.group().strip() if des_match else None,
         "course_codes": list(set(COURSE_RE.findall(section))),
+        "programs": list(set([p.strip().strip("*:_#") for p in PROGRAM_RE.findall(section)])),
     }
 
     # Extract dynamic payload data via entity parsing layers safely

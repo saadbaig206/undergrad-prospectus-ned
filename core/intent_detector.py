@@ -100,14 +100,24 @@ class IntentDetector:
         return seat, general
 
     def classify(self, query, query_vector=None):
-        # Direct keyword override for strong indicator words (including common typos like 'eats')
         query_clean = re.sub(r"[^\w\s]", "", query.lower().strip())
         words = set(query_clean.split())
         strong_indicators = {"seat", "seats", "eats", "sats", "seates", "quota", "vacancy", "vacancies", "allocation", "distribution", "matrix"}
         if any(w in words for w in strong_indicators):
             return "SEAT"
 
-        rag_indicators = {"chairperson", "chairman", "chair", "cochairperson", "head", "dean", "director", "professor", "department", "dept", "engineering", "science", "fees", "fee", "eligibility", "eligible", "admission", "admissions", "civil", "mechanical", "electrical", "software", "computer"}
+        # Core fixed RAG triggers
+        rag_indicators = {"department", "dept", "fees", "fee", "eligibility", "eligible", "admission", "admissions", "program", "course", "syllabus", "curriculum", "merit", "aggregate"}
+        import os, json
+        dept_path = os.path.join("output_chunks", "departments.json")
+        if os.path.exists(dept_path):
+            try:
+                with open(dept_path, "r", encoding="utf-8") as f:
+                    dynamic_depts = json.load(f)
+                    rag_indicators.update(dynamic_depts)
+            except Exception:
+                pass
+
         if any(w in words for w in rag_indicators):
             return "RAG"
 

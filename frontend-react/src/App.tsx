@@ -33,9 +33,11 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [usePgKnowledge, setUsePgKnowledge] = useState(false);
 
   // Ingestion State
   const [academicLevel, setAcademicLevel] = useState<'undergraduate' | 'postgraduate'>('undergraduate');
+  const [extractSeats, setExtractSeats] = useState(false);
   const [excludedPages, setExcludedPages] = useState('79,80,81');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [ingestStatus, setIngestStatus] = useState<'idle' | 'uploading' | 'processing' | 'success' | 'error'>('idle');
@@ -198,7 +200,7 @@ function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ query: queryText, history: historyPayload }),
+        body: JSON.stringify({ query: queryText, history: historyPayload, use_pg_knowledge: usePgKnowledge }),
       });
 
       if (!res.ok) {
@@ -287,7 +289,7 @@ function App() {
     const formData = new FormData();
     formData.append('file', uploadFile);
     formData.append('academic_level', academicLevel);
-    formData.append('excluded_pages', academicLevel === 'undergraduate' ? excludedPages : '');
+    formData.append('excluded_pages', (academicLevel === 'undergraduate' && extractSeats) ? excludedPages : '');
 
     try {
       const res = await fetch(`${API_URL}/admin/upload-prospectus`, {
@@ -354,8 +356,7 @@ function App() {
     return (
       <div className="auth-panel-wrapper">
         <div className="auth-panel-card">
-          <img src="/image.png" alt="University Logo" style={{ height: '72px', width: 'auto', marginBottom: '16px', borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f43f5e', marginBottom: '4px' }}>Prospectus AI</h2>
+          <img src="/image.png" alt="Prospectus AI Logo" style={{ height: '140px', width: 'auto', marginBottom: '8px', borderRadius: '8px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
             Official Academic RAG Assistant
           </p>
@@ -414,9 +415,8 @@ function App() {
     <div className="app-container">
       {/* Sidebar Panel */}
       <div className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
-        <div className="sidebar-header">
-          <img src="/image.png" alt="University Logo" className="sidebar-logo" style={{ borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <span className="sidebar-title">Prospectus AI</span>
+        <div className="sidebar-header" style={{ justifyContent: 'center', padding: '16px' }}>
+          <img src="/image.png" alt="Prospectus AI Logo" className="sidebar-logo" style={{ height: 'auto', width: '120px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         </div>
 
         <div className="sidebar-content">
@@ -511,7 +511,7 @@ function App() {
                               {copiedIndex === idx ? '✓ Copied' : '📋 Copy'}
                             </button>
                             {m.content.includes('/seat_distribution.pdf') && (
-                              <button className="btn-action" onClick={downloadSeatMatrix} style={{ color: '#f43f5e' }}>
+                              <button className="btn-action" onClick={downloadSeatMatrix} style={{ color: 'var(--primary-accent)' }}>
                                 📥 Download Seat Matrix PDF
                               </button>
                             )}
@@ -556,26 +556,75 @@ function App() {
             <p style={{ color: 'var(--text-muted)' }}>Process and index new undergraduate or postgraduate prospectus files into Pinecone database.</p>
             
             <form onSubmit={handleIngestSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '12px' }}>
+              <div className="form-group" style={{ padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    id="usePgKnowledgeAdmin"
+                    checked={usePgKnowledge}
+                    onChange={(e) => setUsePgKnowledge(e.target.checked)}
+                    style={{ margin: 0, width: '18px', height: '18px', cursor: 'pointer' }}
+                  />
+                  <label htmlFor="usePgKnowledgeAdmin" style={{ margin: 0, cursor: 'pointer', color: 'var(--text-main)', fontSize: '1rem', fontWeight: 600 }}>
+                    Global: Enable Postgraduate Knowledge in Chat
+                  </label>
+                </div>
+                <p style={{ margin: '8px 0 0 26px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  If disabled, the RAG pipeline will block postgraduate queries and fall back to undergraduate data.
+                </p>
+              </div>
+
               <div className="form-group">
-                <label>Academic Level</label>
-                <select
-                  value={academicLevel}
-                  onChange={(e) => setAcademicLevel(e.target.value as any)}
-                >
-                  <option value="undergraduate">Undergraduate (Tags vectors and extracts seat matrix)</option>
-                  <option value="postgraduate">Postgraduate (Ingests text chunks directly)</option>
-                </select>
+                <label>Target Academic Level</label>
+                <div style={{ display: 'flex', gap: '20px', marginTop: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
+                    <input 
+                      type="radio" 
+                      name="acad_level" 
+                      value="undergraduate" 
+                      checked={academicLevel === 'undergraduate'} 
+                      onChange={() => setAcademicLevel('undergraduate')} 
+                      style={{ width: '16px', height: '16px' }}
+                    />
+                    Undergraduate Mode
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
+                    <input 
+                      type="radio" 
+                      name="acad_level" 
+                      value="postgraduate" 
+                      checked={academicLevel === 'postgraduate'} 
+                      onChange={() => setAcademicLevel('postgraduate')} 
+                      style={{ width: '16px', height: '16px' }}
+                    />
+                    Postgraduate Mode
+                  </label>
+                </div>
               </div>
 
               {academicLevel === 'undergraduate' && (
                 <div className="form-group">
-                  <label>Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <input
+                      type="checkbox"
+                      id="extractSeats"
+                      checked={extractSeats}
+                      onChange={(e) => setExtractSeats(e.target.checked)}
+                      style={{ margin: 0, width: '16px', height: '16px' }}
+                    />
+                    <label htmlFor="extractSeats" style={{ margin: 0, cursor: 'pointer' }}>
+                      Extract Seat Distribution into Separate File
+                    </label>
+                  </div>
+                  <label style={{ opacity: extractSeats ? 1 : 0.5 }}>Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)</label>
                   <input
                     type="text"
                     value={excludedPages}
                     onChange={(e) => setExcludedPages(e.target.value)}
                     placeholder="e.g. 79,80,81"
-                    required
+                    disabled={!extractSeats}
+                    required={extractSeats}
+                    style={{ opacity: extractSeats ? 1 : 0.5 }}
                   />
                 </div>
               )}
@@ -583,7 +632,6 @@ function App() {
               <div className="form-group">
                 <label>Select Prospectus PDF File</label>
                 <input
-                  key={uploadFile ? 'file-present' : 'file-empty'}
                   type="file"
                   accept=".pdf"
                   onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
@@ -592,7 +640,7 @@ function App() {
                 />
               </div>
 
-              {ingestStatus === 'uploading' && <div style={{ color: '#f43f5e', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
+              {ingestStatus === 'uploading' && <div style={{ color: 'var(--primary-accent)', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
               {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ {ingestMsg}</div>}
               {ingestStatus === 'success' && <div style={{ color: '#10b981', fontWeight: 600 }}>✅ {ingestMsg}</div>}
               {ingestStatus === 'error' && <div style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ {ingestMsg}</div>}

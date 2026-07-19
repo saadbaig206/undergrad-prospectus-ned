@@ -31,7 +31,11 @@ class LocalBM25:
         document_lengths = []
         for chunk in self.chunks:
             chunk["academic_level"] = academic_level
-            tokens = self.tokenize(chunk.get("text", ""))
+            
+            # Combine text with critical metadata for BM25 to ensure keyword hits on program names and headings
+            rich_text = f"{chunk.get('program', '')} {chunk.get('heading_path', '')} {chunk.get('text', '')}"
+            tokens = self.tokenize(rich_text)
+            
             chunk["tokens"] = tokens
             term_freqs = {}
             for token in tokens:

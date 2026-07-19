@@ -8,6 +8,7 @@ class AuthRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     history: Optional[List[Dict[str, str]]] = []
+    use_pg_knowledge: Optional[bool] = False
 
 class CreateAdminRequest(BaseModel):
     username: str

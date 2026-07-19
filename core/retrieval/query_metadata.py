@@ -38,7 +38,7 @@ SECTIONS = {
         "eligibility", "eligible",
     ],
     "admission":[
-        "admission", "apply", "application",
+        "admission", "apply", "application", "merit", "aggregate", "seat", "seats", "allocation", "quota"
     ],
     "scholarship":[
         "scholarship", "financial assistance",
@@ -79,6 +79,7 @@ def load_dynamic_metadata():
     unique_depts = set()
     unique_faculties = set()
     unique_programs = set()
+    unique_designations = set()
     
     for file_path in files:
         if os.path.exists(file_path):
@@ -97,6 +98,10 @@ def load_dynamic_metadata():
                         prog = chunk.get("program")
                         if prog:
                             unique_programs.add(prog.strip())
+                            
+                        desig = chunk.get("designation")
+                        if desig:
+                            unique_designations.add(desig.strip())
             except Exception as e:
                 print(f"[WARNING] Failed to load metadata from {file_path}: {e}")
                 
@@ -109,10 +114,12 @@ def load_dynamic_metadata():
         if clean_d:
             aliases.append(clean_d)
         if "department" in clean_d:
-            aliases.append(clean_d.replace("department", "").replace("of", "").strip())
+            clean_d2 = clean_d.replace("departments", "").replace("department", "").replace("of", "").strip()
+            if len(clean_d2) > 2:
+                aliases.append(clean_d2)
             
         # Clean up multiple spaces
-        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a]
+        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a and len(a) > 2]
         DEPARTMENTS[d] = list(set(aliases))
         
     for f in unique_faculties:
@@ -124,9 +131,11 @@ def load_dynamic_metadata():
         if clean_f:
             aliases.append(clean_f)
         if "faculty" in clean_f:
-            aliases.append(clean_f.replace("faculty", "").replace("of", "").strip())
+            clean_f2 = clean_f.replace("faculty", "").replace("of", "").strip()
+            if len(clean_f2) > 2:
+                aliases.append(clean_f2)
             
-        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a]
+        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a and len(a) > 2]
         FACULTIES[f] = list(set(aliases))
         
     for p in unique_programs:
@@ -138,8 +147,23 @@ def load_dynamic_metadata():
         if clean_p:
             aliases.append(clean_p)
             
-        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a]
+        no_degree = re.sub(r'^(bs|ms|bachelor of|master of|phd|m\.?s\.?|b\.?s\.?|b\.?e\.?)\s+', '', clean_p).strip()
+        if no_degree and len(no_degree) > 2:
+            aliases.append(no_degree)
+            
+        aliases = [re.sub(r'\s+', ' ', a).strip() for a in aliases if a and len(a) > 2]
         PROGRAMS[p] = list(set(aliases))
+        
+    for desig in unique_designations:
+        if not desig or len(desig) > 50:
+            continue
+        d_lower = desig.lower()
+        if d_lower not in SECTIONS["faculty"]:
+            SECTIONS["faculty"].append(d_lower)
+        if d_lower not in ENTITIES:
+            ENTITIES[d_lower] = [d_lower]
+        elif d_lower not in ENTITIES[d_lower]:
+            ENTITIES[d_lower].append(d_lower)
         
     _metadata_loaded = True
 
@@ -176,9 +200,31 @@ def detect_department(query: str):
     return None
 
 def detect_semester(query):
-    m = SEMESTER_RE.search(query)
+    # Try digit format: "semester 10" or "10th semester"
+    m = re.search(r"(?:semester\s*(\d+)|(\d+)(?:st|nd|rd|th)?\s*semester)", query, re.I)
     if m:
-        return int(m.group(1))
+        val = m.group(1) or m.group(2)
+        return int(val)
+        
+    # Try word format: "first semester", "tenth semester", etc.
+    word_map = {
+        "first": 1, "one": 1,
+        "second": 2, "two": 2,
+        "third": 3, "three": 3,
+        "fourth": 4, "four": 4,
+        "fifth": 5, "five": 5,
+        "sixth": 6, "six": 6,
+        "seventh": 7, "seven": 7,
+        "eighth": 8, "eight": 8,
+        "ninth": 9, "nine": 9,
+        "tenth": 10, "ten": 10,
+        "eleventh": 11, "eleven": 11,
+        "twelfth": 12, "twelve": 12
+    }
+    for word, num in word_map.items():
+        if re.search(rf"\b{word}\s+semester\b", query, re.I) or re.search(rf"\bsemester\s+{word}\b", query, re.I):
+            return num
+            
     return None
 
 def detect_year_level(query):
@@ -218,10 +264,11 @@ def detect_section(query: str):
     return None
 
 def detect_entity(query):
-    entities = ["chairperson", "co-chairperson", "dean", "director", "advisor", "coordinator"]
-    for entity in entities:
-        if entity in query:
-            return entity
+    load_dynamic_metadata()
+    q = query.lower()
+    for key, aliases in ENTITIES.items():
+        if any(alias in q for alias in aliases):
+            return key
     return None
 
 def build_metadata(query: str):
@@ -241,13 +288,17 @@ def build_metadata(query: str):
     if department:
         filters["department"] = department
     if section:
-        filters["section"] = section
+        if section != "admission":
+            filters["section"] = section
     if faculty:
         filters["faculty"] = faculty
-    if program:
-        filters["program"] = program
-    if semester is not None:
-        filters["semester"] = semester
+    
+    # We no longer strictly filter by program because table extraction often appends trailing 
+    # table column data to the program name, causing exact-match DB filters to fail.
+    # Semantic Search + BM25 handles program routing perfectly on its own.
+    # We also do not strictly filter by semester, because previously ingested databases might have 
+    # 'null' semester values due to table formatting (e.g. 'SEMESTER-1').
+    
     if course_code:
         filters["course_codes"] = {"$in": [course_code]}
     # For fee_type we could map to a specific filter if the DB supports it, or section="fees"

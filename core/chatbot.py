@@ -552,7 +552,7 @@ async def condense_query(chat_history: list, user_query: str) -> str:
         return user_query
         
 
-async def route_chat_stream(user_query: str, chat_history: list = None):
+async def route_chat_stream(user_query: str, chat_history: list = None, use_pg_knowledge: bool = False):
     """Routes the query dynamically based on content type and streams the response."""
     import time
     chat_history = clean_history_for_llm(chat_history or [])
@@ -601,9 +601,6 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
             return
             
     if intent == "SEAT":
-        if condense_task:
-            condense_task.cancel()
-        is_seat_query = True
         import re
         query_lower = expanded_user_query.lower()
         if chat_history:
@@ -620,23 +617,38 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
             r"\bdae\b", r"\bintermediate\b", r"\bhsc\b", r"\bmatric\b"
         ]
         is_pg = any(re.search(pat, query_lower) for pat in pg_patterns)
+        if not use_pg_knowledge:
+            is_pg = False
         is_ug = any(re.search(pat, query_lower) for pat in ug_patterns)
         
-        if is_pg and not is_ug:
-            yield "There is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
-            return
-        elif is_ug and not is_pg:
-            yield f"For the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
-            return
+        from backend.database import get_prospectus_metadata
+        ug_pages = get_prospectus_metadata("undergraduate")
+        pg_pages = get_prospectus_metadata("postgraduate")
+        
+        # If no seat pages are configured for the detected level(s), fallback to RAG
+        if (is_ug and not is_pg and not ug_pages) or (is_pg and not is_ug and not pg_pages) or (not is_ug and not is_pg and not ug_pages and not pg_pages):
+            intent = "RAG"
+            # Fall through to the RAG intent block below
         else:
-            yield f"### Undergraduate\nFor the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
-            yield "### Postgraduate / Masters\nThere is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
-            return
+            if condense_task:
+                condense_task.cancel()
+            is_seat_query = True
+            
+            if is_pg and not is_ug:
+                yield "There is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
+                return
+            elif is_ug and not is_pg:
+                yield f"For the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
+                return
+            else:
+                yield f"### Undergraduate\nFor the complete and accurate Undergraduate Seat Distribution Matrix, please refer to the official document: [Undergraduate Seat Distribution PDF]({SEAT_DIST_FILE_LINK}).\n\n"
+                yield "### Postgraduate / Masters\nThere is no fixed seat distribution matrix published in the Postgraduate Prospectus. Admissions to postgraduate Master's and Ph.D. programmes are determined based on departmental capacity, eligibility criteria, and academic/faculty resources rather than a predefined category-wise seat matrix. For details on specific programmes, please consult the respective department sections in the Postgraduate Prospectus.\n"
+                return
         
     if intent == "GENERAL":
         if condense_task:
             condense_task.cancel()
-        system_base = "You are Prospectus AI, the official academic assistant for the University. Answer the user's query directly and helpfully. Always identify yourself as Prospectus AI. Do NOT include page citations, references, or source details. Do NOT answer specific academic, admission, course, or department queries using external knowledge. If asked about any other university facts, history, programs, or details, politely state that you can only answer from the official records and guide the user to ask their specific question so you can look it up in the prospectus. CRITICAL: Never explicitly mention any specific university name (such as 'NED University', 'NED', 'NEDUET') in your responses. Always use the generic term 'the University' instead."
+        system_base = "You are Prospectus AI, the official academic assistant. Answer the user's query directly and helpfully. Always identify yourself as Prospectus AI. Do NOT include page citations, references, or source details. Do NOT answer specific academic, admission, course, or department queries using external knowledge. If asked about any other university facts, history, programs, or details, politely state that you can only answer from the official records and guide the user to ask their specific question so you can look it up in the prospectus. You should refer to the university by its specific name as found in the context or query."
         standalone_query = expanded_user_query
     else: # RAG
         if condense_task:
@@ -684,7 +696,10 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
                         break
             
             filter_dict = {}
-            if is_pg and not is_ug:
+            if not use_pg_knowledge:
+                filter_dict = {"academic_level": "undergraduate"}
+                print("[DEBUG] Filtering Pinecone by: undergraduate (PG knowledge disabled)")
+            elif is_pg and not is_ug:
                 filter_dict = {"academic_level": "postgraduate"}
                 print("[DEBUG] Filtering Pinecone by: postgraduate")
             elif is_ug and not is_pg:
@@ -709,7 +724,8 @@ async def route_chat_stream(user_query: str, chat_history: list = None):
                 query_vector=query_vector,
                 academic_level_filter=filter_dict if filter_dict else None,
                 is_ug=is_ug,
-                is_pg=is_pg
+                is_pg=is_pg,
+                use_pg_knowledge=use_pg_knowledge
             )
             context = retrieval_res.get("context", "No context available.")
             print(f"[LATENCY] Advanced Retrieval Pipeline: {time.time() - t_query:.4f}s")
@@ -751,7 +767,7 @@ Instructions:
  
 9. **Evergreen & Professional**: Keep responses professional, concise, and evergreen. Speak about programs and rules directly rather than referencing the source document as a paper file, but still include the required parenthetical source citations (e.g., `(UG Prospectus, Page 20)`).
 
-10. **Generic Naming**: NEVER explicitly mention any specific university name (such as "NED University", "NED", "NEDUET", etc.) in your responses. Always use the generic term "the University" instead."""
+10. **University Identity**: Identify the specific university name from the retrieved context (e.g. "NED University of Engineering & Technology", "SSUET", etc.) and use it appropriately in your responses when referring to the institution. If no specific name is found, use "the University"."""
         
         if is_seat_query:
             system_base += "\n\n11. Focus exclusively on seat distribution and the number of seats. Do NOT mention, list, or summarize any university fees, tuition fees, admission fees, security deposits, or document verification charges, even if they appear in the retrieved context."

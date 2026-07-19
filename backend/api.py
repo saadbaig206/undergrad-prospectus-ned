@@ -271,7 +271,7 @@ async def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, acade
 
         print(f"Background Ingestion Started for {academic_level}. Matrix pages: {seat_matrix_pages}")
         update_ingestion_status(academic_level, "processing")
-        res = await ingest_prospectus(pdf_path, academic_level, 2026, "seat_distribution.pdf")
+        res = await ingest_prospectus(pdf_path, academic_level, 2026, "seat_distribution.pdf", seat_matrix_pages)
         if not res.success:
             raise Exception(res.message)
         print(f"Background Ingestion Completed Successfully for {academic_level}!")
@@ -439,7 +439,7 @@ async def query_chatbot(payload: QueryRequest, current_user = Depends(get_curren
         
     try:
         return StreamingResponse(
-            route_chat_stream(user_query, chat_history),
+            route_chat_stream(user_query, chat_history, use_pg_knowledge=payload.use_pg_knowledge),
             media_type="text/plain; charset=utf-8",
             headers={
                 "Cache-Control": "no-cache, no-transform",

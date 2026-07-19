@@ -1,6 +1,6 @@
-# 🎓 University UG Prospectus RAG Chatbot
+# 🎓 Dynamic University Prospectus RAG Chatbot
 
-An AI-powered Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate Prospectuses. Built with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **Streamlit glassmorphism frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, **Model2Vec (minishlab/potion-base-8M)** local embeddings, and **Groq LLMs**.
+An AI-powered, institution-agnostic Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate and Postgraduate Prospectuses. Built to dynamically adapt to any university's documentation (e.g., NED, SSUET, etc.) with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **Streamlit glassmorphism frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, **Model2Vec (minishlab/potion-base-8M)** local embeddings, and **Groq LLMs**.
 
 ---
 

@@ -27,6 +27,7 @@ async def ingest_prospectus(
     academic_level: str,
     year: int,
     seat_distribution_output: str = "seat_distribution.pdf",
+    excluded_pages: list[int] = None
 ) -> IngestionResult:
     start = perf_counter()
     temp_pdf = None
@@ -34,7 +35,7 @@ async def ingest_prospectus(
         print(f"[INGESTION] Starting ingestion for {academic_level.upper()} prospectus...")
         temp_pdf = split_pdf(
             pdf_path,
-            excluded_pages=[79, 80, 81],
+            excluded_pages=excluded_pages or [],
             output_seat_path=seat_distribution_output,
         )
         print(f"[INGESTION] PDF Split complete. Temporary file: {temp_pdf}")
@@ -70,13 +71,43 @@ async def ingest_prospectus(
         json_path = os.path.join("output_chunks", f"{prefix}Prospectus_compiled_knowledge.json")
         
         json_data = []
+        rag_keywords = set()
         for doc in chunks:
             item = dict(doc.metadata)
             item["text"] = doc.page_content
             json_data.append(item)
             
+            dept = item.get("department")
+            if dept:
+                dept_clean = str(dept).lower().replace("department of ", "").replace("dept of ", "").strip()
+                for w in dept_clean.split():
+                    w = ''.join(c for c in w if c.isalpha())
+                    if len(w) > 3:
+                        rag_keywords.add(w)
+            
+            designation = item.get("designation")
+            if designation:
+                desig_clean = str(designation).lower().strip()
+                for w in desig_clean.split():
+                    w = ''.join(c for c in w if c.isalpha())
+                    if len(w) > 3:
+                        rag_keywords.add(w)
+            
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, indent=4)
+            
+        dept_path = os.path.join("output_chunks", "departments.json")
+        existing_keywords = []
+        if os.path.exists(dept_path):
+            try:
+                with open(dept_path, "r", encoding="utf-8") as f:
+                    existing_keywords = json.load(f)
+            except Exception:
+                pass
+        
+        all_keywords = list(set(existing_keywords) | rag_keywords)
+        with open(dept_path, "w", encoding="utf-8") as f:
+            json.dump(all_keywords, f, indent=4)
 
         return IngestionResult(
             success=True,

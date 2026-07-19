@@ -35,14 +35,23 @@ def split_pdf(input_path, excluded_pages, output_seat_path):
             main_doc.insert_pdf(doc, from_page=page_no, to_page=page_no)
 
     main_doc.save(main_pdf_path, garbage=0, clean=False, deflate=False)
-    seat_doc.save(output_seat_path, garbage=0, clean=False, deflate=False)
+    
+    if seat_doc.page_count > 0:
+        seat_doc.save(output_seat_path, garbage=0, clean=False, deflate=False)
+        print(f" Saved seat distribution PDF to: {output_seat_path}")
+    else:
+        print(" No seat distribution pages provided. Skipping seat PDF creation.")
+        if os.path.exists(output_seat_path):
+            try:
+                os.remove(output_seat_path)
+            except Exception:
+                pass
 
     main_doc.close()
     seat_doc.close()
     doc.close()
 
     print(f" Saved main PDF to: {main_pdf_path}")
-    print(f" Saved seat distribution PDF to: {output_seat_path}")
 
     return main_pdf_path
 
