@@ -56,27 +56,40 @@ graph TD
 
 ```
 workspace/
+├── api/
+│   └── index.py         # Vercel Serverless Function entrypoint (with root path resolver)
 ├── backend/
 │   ├── __init__.py
 │   ├── api.py           # FastAPI routes, auth middleware, and background workers
 │   ├── database.py      # Neon Postgres connection, schema init, & connection validator
 │   └── schemas.py       # Pydantic validation request/response objects
+├── core/
+│   ├── cache/           # Semantic caching implementation
+│   ├── handlers/        # Specialized query and identity handlers
+│   ├── ingestion/       # Extraction, splitting, and vector indexing logic
+│   ├── llm/             # LLM configurations and failover logic
+│   ├── retrieval/       # Hybrid search and retrieval strategies
+│   ├── startup/         # Application startup routines
+│   ├── utils/           # Helper utilities and formatting
+│   ├── __init__.py
+│   ├── chatbot.py       # Core RAG querying engine orchestrator
+│   ├── config.py        # Core configuration settings
+│   ├── embeddings.py    # Embedding model integration
+│   └── intent_detector.py # User intent classification
 ├── frontend-react/
 │   ├── src/             # React source code and components
 │   └── package.json     # React UI client with chat & Admin panels
-├── core/
-│   ├── __init__.py
-│   ├── chatbot.py       # Core RAG querying engine (Groq model + Pinecone lookup)
-│   ├── main.py          # Parallel page-by-page PDF extraction, text splitting, & vector indexing
-│   └── admin_process.py # PDF processing operations, layout splits & OCR fallbacks
+├── output_chunks/       # Cached ingestion processing output files
 ├── public/
 │   └── seat_distribution.pdf  # Extracted seat matrix pages (served via Vercel Edge CDN)
-├── api/
-│   └── index.py         # Vercel Serverless Function entrypoint (with root path resolver)
-├── vercel.json          # Vercel deployment routing & rewrite configurations
+├── tests/               # Unit testing and benchmarking scripts
 ├── .env                 # API Keys and database configuration
+├── .gitignore           # Git ignore rules
+├── PGProspectus.pdf     # Main postgraduate prospectus source document
+├── README.md            # Project documentation
 ├── requirements.txt     # Virtual environment dependencies
-└── UGProspectus2025.pdf # Main prospectus source document
+├── UGProspectus.pdf     # Main undergraduate prospectus source document
+└── vercel.json          # Vercel deployment routing & rewrite configurations
 ```
 
 ---

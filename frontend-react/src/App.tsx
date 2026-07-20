@@ -549,144 +549,148 @@ function App() {
           </div>
         )}
 
-        {/* Tab 2: Ingest PDF */}
-        {activeTab === 'ingest' && (
-          <div className="content-panel glass-panel">
-            <h2>Ingest Prospectus PDF</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Process and index new undergraduate or postgraduate prospectus files into Pinecone database.</p>
-            
-            <form onSubmit={handleIngestSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '12px' }}>
-              <div className="form-group" style={{ padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <input
-                    type="checkbox"
-                    id="usePgKnowledgeAdmin"
-                    checked={usePgKnowledge}
-                    onChange={(e) => setUsePgKnowledge(e.target.checked)}
-                    style={{ margin: 0, width: '18px', height: '18px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="usePgKnowledgeAdmin" style={{ margin: 0, cursor: 'pointer', color: 'var(--text-main)', fontSize: '1rem', fontWeight: 600 }}>
-                    Global: Enable Postgraduate Knowledge in Chat
-                  </label>
-                </div>
-                <p style={{ margin: '8px 0 0 26px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  If disabled, the RAG pipeline will block postgraduate queries and fall back to undergraduate data.
-                </p>
-              </div>
-
-              <div className="form-group">
-                <label>Target Academic Level</label>
-                <div style={{ display: 'flex', gap: '20px', marginTop: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
-                    <input 
-                      type="radio" 
-                      name="acad_level" 
-                      value="undergraduate" 
-                      checked={academicLevel === 'undergraduate'} 
-                      onChange={() => setAcademicLevel('undergraduate')} 
-                      style={{ width: '16px', height: '16px' }}
-                    />
-                    Undergraduate Mode
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
-                    <input 
-                      type="radio" 
-                      name="acad_level" 
-                      value="postgraduate" 
-                      checked={academicLevel === 'postgraduate'} 
-                      onChange={() => setAcademicLevel('postgraduate')} 
-                      style={{ width: '16px', height: '16px' }}
-                    />
-                    Postgraduate Mode
-                  </label>
-                </div>
-              </div>
-
-              {academicLevel === 'undergraduate' && (
-                <div className="form-group">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <input
-                      type="checkbox"
-                      id="extractSeats"
-                      checked={extractSeats}
-                      onChange={(e) => setExtractSeats(e.target.checked)}
-                      style={{ margin: 0, width: '16px', height: '16px' }}
-                    />
-                    <label htmlFor="extractSeats" style={{ margin: 0, cursor: 'pointer' }}>
-                      Extract Seat Distribution into Separate File
-                    </label>
+        {/* Scrollable container for other tabs */}
+        {(activeTab === 'ingest' || activeTab === 'register-admin') && (
+          <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '40px' }}>
+            {activeTab === 'ingest' && (
+              <div className="content-panel glass-panel">
+                <h2>Ingest Prospectus PDF</h2>
+                <p style={{ color: 'var(--text-muted)' }}>Process and index new undergraduate or postgraduate prospectus files into Pinecone database.</p>
+                
+                <form onSubmit={handleIngestSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '12px' }}>
+                  <div className="form-group" style={{ padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="checkbox"
+                        id="usePgKnowledgeAdmin"
+                        checked={usePgKnowledge}
+                        onChange={(e) => setUsePgKnowledge(e.target.checked)}
+                        style={{ margin: 0, width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="usePgKnowledgeAdmin" style={{ margin: 0, cursor: 'pointer', color: 'var(--text-main)', fontSize: '1rem', fontWeight: 600 }}>
+                        Global: Enable Postgraduate Knowledge in Chat
+                      </label>
+                    </div>
+                    <p style={{ margin: '8px 0 0 26px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      If disabled, the RAG pipeline will block postgraduate queries and fall back to undergraduate data.
+                    </p>
                   </div>
-                  <label style={{ opacity: extractSeats ? 1 : 0.5 }}>Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)</label>
-                  <input
-                    type="text"
-                    value={excludedPages}
-                    onChange={(e) => setExcludedPages(e.target.value)}
-                    placeholder="e.g. 79,80,81"
-                    disabled={!extractSeats}
-                    required={extractSeats}
-                    style={{ opacity: extractSeats ? 1 : 0.5 }}
-                  />
-                </div>
-              )}
 
-              <div className="form-group">
-                <label>Select Prospectus PDF File</label>
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  className="file-upload-input"
-                  required
-                />
+                  <div className="form-group">
+                    <label>Target Academic Level</label>
+                    <div style={{ display: 'flex', gap: '20px', marginTop: '8px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
+                        <input 
+                          type="radio" 
+                          name="acad_level" 
+                          value="undergraduate" 
+                          checked={academicLevel === 'undergraduate'} 
+                          onChange={() => setAcademicLevel('undergraduate')} 
+                          style={{ width: '16px', height: '16px' }}
+                        />
+                        Undergraduate Mode
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-main)' }}>
+                        <input 
+                          type="radio" 
+                          name="acad_level" 
+                          value="postgraduate" 
+                          checked={academicLevel === 'postgraduate'} 
+                          onChange={() => setAcademicLevel('postgraduate')} 
+                          style={{ width: '16px', height: '16px' }}
+                        />
+                        Postgraduate Mode
+                      </label>
+                    </div>
+                  </div>
+
+                  {academicLevel === 'undergraduate' && (
+                    <div className="form-group">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <input
+                          type="checkbox"
+                          id="extractSeats"
+                          checked={extractSeats}
+                          onChange={(e) => setExtractSeats(e.target.checked)}
+                          style={{ margin: 0, width: '16px', height: '16px' }}
+                        />
+                        <label htmlFor="extractSeats" style={{ margin: 0, cursor: 'pointer' }}>
+                          Extract Seat Distribution into Separate File
+                        </label>
+                      </div>
+                      <label style={{ opacity: extractSeats ? 1 : 0.5 }}>Excluded Seat Distribution Pages (comma-separated, e.g. 79,80,81)</label>
+                      <input
+                        type="text"
+                        value={excludedPages}
+                        onChange={(e) => setExcludedPages(e.target.value)}
+                        placeholder="e.g. 79,80,81"
+                        disabled={!extractSeats}
+                        required={extractSeats}
+                        style={{ opacity: extractSeats ? 1 : 0.5 }}
+                      />
+                    </div>
+                  )}
+
+                  <div className="form-group">
+                    <label>Select Prospectus PDF File</label>
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                      className="file-upload-input"
+                      required
+                    />
+                  </div>
+
+                  {ingestStatus === 'uploading' && <div style={{ color: 'var(--primary-accent)', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
+                  {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ {ingestMsg}</div>}
+                  {ingestStatus === 'success' && <div style={{ color: '#10b981', fontWeight: 600 }}>✅ {ingestMsg}</div>}
+                  {ingestStatus === 'error' && <div style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ {ingestMsg}</div>}
+
+                  <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading' || ingestStatus === 'processing'}>
+                    {ingestStatus === 'processing' ? 'Ingestion In Progress...' : 'Start Ingestion'}
+                  </button>
+                </form>
               </div>
+            )}
 
-              {ingestStatus === 'uploading' && <div style={{ color: 'var(--primary-accent)', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
-              {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ {ingestMsg}</div>}
-              {ingestStatus === 'success' && <div style={{ color: '#10b981', fontWeight: 600 }}>✅ {ingestMsg}</div>}
-              {ingestStatus === 'error' && <div style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ {ingestMsg}</div>}
+            {/* Tab 3: Register Admin */}
+            {activeTab === 'register-admin' && (
+              <div className="content-panel glass-panel">
+                <h2>Register Admin Profile</h2>
+                <p style={{ color: 'var(--text-muted)' }}>Generate a secondary credentials profile with full system modification rights.</p>
+                
+                <form onSubmit={handleRegisterAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '12px' }}>
+                  <div className="form-group">
+                    <label>New Username</label>
+                    <input
+                      type="text"
+                      value={newAdminUser}
+                      onChange={(e) => setNewAdminUser(e.target.value)}
+                      placeholder="Enter username"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>New Password</label>
+                    <input
+                      type="password"
+                      value={newAdminPass}
+                      onChange={(e) => setNewAdminPass(e.target.value)}
+                      placeholder="Enter password"
+                      required
+                    />
+                  </div>
 
-              <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading' || ingestStatus === 'processing'}>
-                {ingestStatus === 'processing' ? 'Ingestion In Progress...' : 'Start Ingestion'}
-              </button>
-            </form>
-          </div>
-        )}
+                  {adminRegError && <div style={{ color: '#ef4444', fontSize: '0.9rem', fontWeight: 600 }}>⚠️ {adminRegError}</div>}
+                  {adminRegSuccess && <div style={{ color: '#10b981', fontSize: '0.9rem', fontWeight: 600 }}>✅ {adminRegSuccess}</div>}
 
-        {/* Tab 3: Register Admin */}
-        {activeTab === 'register-admin' && (
-          <div className="content-panel glass-panel">
-            <h2>Register Admin Profile</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Generate a secondary credentials profile with full system modification rights.</p>
-            
-            <form onSubmit={handleRegisterAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '12px' }}>
-              <div className="form-group">
-                <label>New Username</label>
-                <input
-                  type="text"
-                  value={newAdminUser}
-                  onChange={(e) => setNewAdminUser(e.target.value)}
-                  placeholder="Enter username"
-                  required
-                />
+                  <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }}>
+                    Register Profile
+                  </button>
+                </form>
               </div>
-              <div className="form-group">
-                <label>New Password</label>
-                <input
-                  type="password"
-                  value={newAdminPass}
-                  onChange={(e) => setNewAdminPass(e.target.value)}
-                  placeholder="Enter password"
-                  required
-                />
-              </div>
-
-              {adminRegError && <div style={{ color: '#ef4444', fontSize: '0.9rem', fontWeight: 600 }}>⚠️ {adminRegError}</div>}
-              {adminRegSuccess && <div style={{ color: '#10b981', fontSize: '0.9rem', fontWeight: 600 }}>✅ {adminRegSuccess}</div>}
-
-              <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }}>
-                Register Profile
-              </button>
-            </form>
+            )}
           </div>
         )}
       </div>
