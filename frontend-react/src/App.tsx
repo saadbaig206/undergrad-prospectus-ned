@@ -42,6 +42,7 @@ function App() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [ingestStatus, setIngestStatus] = useState<'idle' | 'uploading' | 'processing' | 'success' | 'error'>('idle');
   const [ingestMsg, setIngestMsg] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Admin Registration State
   const [newAdminUser, setNewAdminUser] = useState('');
@@ -285,6 +286,7 @@ function App() {
 
     setIngestStatus('uploading');
     setIngestMsg('');
+    setUploadProgress(0);
 
     const formData = new FormData();
     formData.append('file', uploadFile);
@@ -292,26 +294,67 @@ function App() {
     formData.append('excluded_pages', (academicLevel === 'undergraduate' && extractSeats) ? excludedPages : '');
 
     try {
-      const res = await fetch(`${API_URL}/admin/upload-prospectus`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
+      const data = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_URL}/admin/upload-prospectus`);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percentComplete = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(percentComplete);
+          }
+        };
 
-      if (!res.ok) {
-        const errData = await res.json();
-        setIngestStatus('error');
-        setIngestMsg(errData.detail || 'Ingestion upload failed.');
-        return;
-      }
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try { resolve(JSON.parse(xhr.responseText)); } catch(e) { resolve({}); }
+          } else {
+            let errMsg = 'Upload failed';
+            try { 
+              const errData = JSON.parse(xhr.responseText);
+              if (errData.detail) errMsg = errData.detail;
+            } catch(e) {}
+            reject(new Error(errMsg));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error('Upload connection timed out.'));
+        xhr.send(formData);
+      });
 
       setIngestStatus('processing');
       setIngestMsg('Processing parallel extraction and indexing in backend...');
       setUploadFile(null);
+      setUploadProgress(0);
 
-    } catch (err) {
+    } catch (err: any) {
       setIngestStatus('error');
-      setIngestMsg('Upload connection timed out.');
+      setIngestMsg(err.message || 'Upload connection timed out.');
+      setUploadProgress(0);
+    }
+  };
+
+  const handleStopIngestion = async () => {
+    if (!token) return;
+    try {
+      const formData = new FormData();
+      formData.append('academic_level', academicLevel);
+      const res = await fetch(`${API_URL}/admin/stop-ingestion`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      if (res.ok) {
+        setIngestStatus('idle');
+        setIngestMsg('Ingestion manually stopped and database reset.');
+      } else {
+        const errorText = await res.text();
+        alert(`Stop ingestion failed: ${res.status} ${errorText}`);
+      }
+    } catch (err) {
+      console.error('Failed to stop ingestion', err);
+      alert(`Failed to stop ingestion: ${err}`);
     }
   };
 
@@ -642,14 +685,30 @@ function App() {
                     />
                   </div>
 
-                  {ingestStatus === 'uploading' && <div style={{ color: 'var(--primary-accent)', fontWeight: 600 }}>📤 Uploading file to backend...</div>}
+                  {ingestStatus === 'uploading' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ color: 'var(--primary-accent)', fontWeight: 600 }}>
+                        📤 Uploading file to backend... {uploadProgress}%
+                      </div>
+                      <div style={{ width: '100%', height: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', background: 'linear-gradient(135deg, var(--primary-accent), var(--secondary-accent))', width: `${uploadProgress}%`, transition: 'width 0.2s ease-in-out' }} />
+                      </div>
+                    </div>
+                  )}
                   {ingestStatus === 'processing' && <div style={{ color: '#fbbf24', fontWeight: 600 }}>⚙️ {ingestMsg}</div>}
                   {ingestStatus === 'success' && <div style={{ color: '#10b981', fontWeight: 600 }}>✅ {ingestMsg}</div>}
                   {ingestStatus === 'error' && <div style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ {ingestMsg}</div>}
 
-                  <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading' || ingestStatus === 'processing'}>
-                    {ingestStatus === 'processing' ? 'Ingestion In Progress...' : 'Start Ingestion'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={ingestStatus === 'uploading' || ingestStatus === 'processing'}>
+                      {ingestStatus === 'processing' ? 'Ingestion In Progress...' : 'Start Ingestion'}
+                    </button>
+                    {ingestStatus === 'processing' && (
+                      <button type="button" onClick={handleStopIngestion} className="btn-primary" style={{ backgroundColor: '#ef4444', alignSelf: 'flex-start' }}>
+                        Stop Ingestion
+                      </button>
+                    )}
+                  </div>
                 </form>
               </div>
             )}

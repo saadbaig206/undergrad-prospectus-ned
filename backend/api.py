@@ -264,6 +264,47 @@ def create_admin(payload: CreateAdminRequest, admin_user = Depends(get_current_a
         
     return {"message": f"Admin user '{payload.username}' created successfully"}
 
+def get_r2_client():
+    import os
+    import boto3
+    from botocore.client import Config
+    
+    account_id = os.getenv("R2_ACCOUNT_ID")
+    access_key = os.getenv("R2_ACCESS_KEY_ID")
+    secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    
+    if not account_id or not access_key or not secret_key:
+        return None
+        
+    return boto3.client(
+        's3',
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(signature_version='s3v4')
+    )
+
+def background_r2_upload(file_path: str):
+    import os
+    try:
+        s3 = get_r2_client()
+        bucket = os.getenv("R2_BUCKET_NAME", "assets")
+        if not s3:
+            return
+            
+        try:
+            s3.delete_object(Bucket=bucket, Key=file_path)
+            print(f"Deleted previous {file_path} from R2.")
+        except Exception:
+            pass
+            
+        with open(file_path, "rb") as f:
+            s3.upload_fileobj(f, bucket, file_path, ExtraArgs={'ContentType': 'application/pdf'})
+            
+        print(f"Successfully uploaded {file_path} to Cloudflare R2 in background!")
+    except Exception as e:
+        print(f"Background upload to R2 failed: {e}")
+
 async def run_ingestion_background(pdf_path: str, seat_matrix_pages: list, academic_level: str):
     from backend.database import update_ingestion_status
     try:
@@ -297,8 +338,12 @@ def upload_prospectus(
 
     prospectus_path = "UGProspectus.pdf" if academic_level == "undergraduate" else "PGProspectus.pdf"
     try:
+        file_bytes = file.file.read()
         with open(prospectus_path, "wb") as buffer:
-            buffer.write(file.file.read())
+            buffer.write(file_bytes)
+            
+        background_tasks.add_task(background_r2_upload, prospectus_path)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not save uploaded PDF: {e}")
         
@@ -345,32 +390,22 @@ def upload_prospectus(
             shutil.copy(static_seat_path, public_seat_path)
             print("Regenerated seat_distribution.pdf locally and in public assets.")
             
-            supabase_url = os.getenv("SUPABASE_URL")
-            supabase_key = os.getenv("SUPABASE_KEY")
-            supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
+            s3 = get_r2_client()
+            bucket = os.getenv("R2_BUCKET_NAME", "assets")
             
-            if supabase_url and supabase_key:
+            if s3:
                 try:
-                    import requests
-                    supabase_url = supabase_url.rstrip("/")
-                    upload_url = f"{supabase_url}/storage/v1/object/{supabase_bucket}/seat_distribution.pdf"
-                    
-                    headers = {
-                        "Authorization": f"Bearer {supabase_key}",
-                        "Content-Type": "application/pdf",
-                        "x-upsert": "true"
-                    }
-                    
-                    with open(static_seat_path, "rb") as f:
-                        file_data = f.read()
+                    try:
+                        s3.delete_object(Bucket=bucket, Key="seat_distribution.pdf")
+                        print("Deleted previous seat_distribution.pdf from R2.")
+                    except Exception:
+                        pass
                         
-                    resp = requests.post(upload_url, headers=headers, data=file_data)
-                    if resp.status_code in (200, 201):
-                        print("Successfully uploaded and overwrote seat_distribution.pdf in Supabase Storage!")
-                    else:
-                        print(f"Supabase upload failed with status {resp.status_code}: {resp.text}")
+                    with open(static_seat_path, "rb") as f:
+                        s3.upload_fileobj(f, bucket, "seat_distribution.pdf", ExtraArgs={'ContentType': 'application/pdf'})
+                    print("Successfully uploaded and overwrote seat_distribution.pdf in Cloudflare R2!")
                 except Exception as e:
-                    print(f"Failed to upload seat distribution PDF to Supabase: {e}")
+                    print(f"Failed to upload seat distribution PDF to R2: {e}")
         except Exception as e:
             print(f"Error regenerating seat distribution PDF: {e}")
 
@@ -381,6 +416,15 @@ def upload_prospectus(
         "excluded_pages_applied": pages_list
     }
 
+@app.post("/admin/stop-ingestion")
+def stop_admin_ingestion(academic_level: str = Form("undergraduate"), admin_user = Depends(get_current_admin)):
+    from backend.database import update_ingestion_status
+    academic_level = academic_level.strip().lower()
+    if academic_level not in ("undergraduate", "postgraduate"):
+        raise HTTPException(status_code=400, detail="academic_level must be either 'undergraduate' or 'postgraduate'")
+    
+    update_ingestion_status(academic_level, "idle", None)
+    return {"message": f"Ingestion for {academic_level} stopped and database state reset to idle."}
 
 @app.get("/admin/ingestion-status")
 def get_admin_ingestion_status(academic_level: str = "undergraduate", admin_user = Depends(get_current_admin)):
@@ -395,15 +439,14 @@ from fastapi.responses import FileResponse
 
 @app.get("/seat_distribution.pdf")
 def get_seat_distribution():
-    # If Supabase URL is configured, retrieve the PDF dynamically from Supabase Storage
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_bucket = os.getenv("SUPABASE_BUCKET", "assets")
+    # If R2 URL is configured, retrieve the PDF dynamically from Cloudflare R2
+    r2_domain = os.getenv("R2_PUBLIC_DOMAIN")
     
-    if supabase_url:
+    if r2_domain:
         try:
             import requests
-            supabase_url = supabase_url.rstrip("/")
-            pdf_url = f"{supabase_url}/storage/v1/object/public/{supabase_bucket}/seat_distribution.pdf"
+            r2_domain = r2_domain.rstrip("/")
+            pdf_url = f"https://{r2_domain}/seat_distribution.pdf"
             resp = requests.get(pdf_url, timeout=10)
             if resp.status_code == 200:
                 from fastapi.responses import Response
@@ -413,7 +456,7 @@ def get_seat_distribution():
                     headers={"Content-Disposition": "attachment; filename=\"seat_distribution.pdf\""}
                 )
         except Exception as e:
-            print(f"Failed to fetch PDF from Supabase: {e}")
+            print(f"Failed to fetch PDF from R2: {e}")
 
     # Local development fallback
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
