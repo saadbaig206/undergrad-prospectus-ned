@@ -121,7 +121,7 @@ async def parse_pdf_to_markdown_async(pdf_path):
 
     if api_key and not is_placeholder:
         try:
-            print("Using LlamaParse to generate markdown data page-by-page via PNG to force OCR (concurrent batch mode)...")
+            print("Using LlamaParse to generate markdown data page-by-page via native PDF to preserve table layouts (concurrent batch mode)...")
             doc = fitz.open(pdf_path)
             total_pages = doc.page_count
             print(f"Total pages to parse: {total_pages}")
@@ -135,20 +135,21 @@ async def parse_pdf_to_markdown_async(pdf_path):
             semaphore = asyncio.Semaphore(10) # 10 concurrent pages
             
             async def parse_page(page_idx):
-                temp_png_path = f"temp_chunk_admin_{page_idx}.png"
+                temp_pdf_path = f"temp_chunk_admin_{page_idx}.pdf"
                 result_text = ""
                 
                 try:
-                    page = doc.load_page(page_idx)
-                    pix = page.get_pixmap(dpi=150)
-                    pix.save(temp_png_path)
+                    page_doc = fitz.open()
+                    page_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+                    page_doc.save(temp_pdf_path)
+                    page_doc.close()
                     
                     async with semaphore:
                         retries = 3
                         while retries > 0:
                             try:
                                 print(f"Uploading and parsing page {page_idx + 1}/{total_pages} (Attempts left: {retries})...")
-                                docs = await asyncio.wait_for(parser.aload_data(temp_png_path), timeout=90)
+                                docs = await asyncio.wait_for(parser.aload_data(temp_pdf_path), timeout=90)
                                 text = "\n\n".join([d.text for d in docs if getattr(d, "text", None)])
                                 print(f"Page {page_idx + 1} parsed successfully.")
                                 result_text = f"\n\n## Page {page_idx + 1}\n\n{text}"
@@ -167,11 +168,8 @@ async def parse_pdf_to_markdown_async(pdf_path):
                 except Exception as e:
                     print(f"Error loading page {page_idx + 1}: {e}")
                 finally:
-                    if os.path.exists(temp_png_path):
-                        try:
-                            os.remove(temp_png_path)
-                        except:
-                            pass
+                    if os.path.exists(temp_pdf_path):
+                        os.remove(temp_pdf_path)
                 
                 return page_idx, result_text
                 
