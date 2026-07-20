@@ -356,7 +356,7 @@ function App() {
     return (
       <div className="auth-panel-wrapper">
         <div className="auth-panel-card">
-          <img src="/image.png" alt="Prospectus AI Logo" style={{ height: '140px', width: 'auto', marginBottom: '8px', borderRadius: '8px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/image.png" alt="Prospectus AI Logo" style={{ height: '80px', width: 'auto', marginBottom: '8px', borderRadius: '8px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
             Official Academic RAG Assistant
           </p>
@@ -416,7 +416,7 @@ function App() {
       {/* Sidebar Panel */}
       <div className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
         <div className="sidebar-header" style={{ justifyContent: 'center', padding: '16px' }}>
-          <img src="/image.png" alt="Prospectus AI Logo" className="sidebar-logo" style={{ height: 'auto', width: '120px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/image.png" alt="Prospectus AI Logo" className="sidebar-logo" style={{ height: 'auto', width: '60px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         </div>
 
         <div className="sidebar-content">
@@ -474,7 +474,7 @@ function App() {
               {messages.length === 0 ? (
                 /* Welcome Centered Screen matching ChatGPT */
                 <div className="welcome-container">
-                  <img src="/image.png" alt="University Logo" className="welcome-logo" style={{ height: '80px', width: 'auto', borderRadius: '50%', marginBottom: '24px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                  <img src="/image.png" alt="University Logo" className="welcome-logo" style={{ height: '60px', width: 'auto', borderRadius: '50%', marginBottom: '24px' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                   <h1 className="welcome-title">Welcome to Prospectus AI</h1>
                   <p className="welcome-subtitle" style={{ maxWidth: '600px', margin: '0 auto', fontSize: '1.15rem', lineHeight: '1.7' }}>
                     Your official academic guide. 

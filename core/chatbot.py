@@ -755,7 +755,8 @@ Instructions:
 4. **Accuracy**: Copy all numerical values, percentages, and names exactly. Never make assumptions, estimate, or invent facts.
  
 5. **Formatting**: Your answers must be incredibly clean and visually professional.
-   - If the retrieved context contains structured data (like course codes, credit hours, seat distributions, or fee structures), **you MUST present it as a Markdown table** (e.g., `| Course Code | Title | Credit Hours | Source |`). 
+   - If the retrieved context contains structured data (like course codes, credit hours, seat distributions, fee structures, or web links), **you MUST present it as a Markdown table** (e.g., `| Course Code | Title | Credit Hours | Source |`). 
+   - If the context contains URLs or links (e.g., for Course Outlines or Program pages), you MUST format them as clickable Markdown links (e.g., `[Link](https://...)`) inside the table. Never just output the plain word "Link" without the actual URL.
    - Never output repetitive, dense, or raw lists of courses/fees.
    - Use bold text for key names, headers, and emphasis.
  

@@ -1,6 +1,6 @@
 # 🎓 Dynamic University Prospectus RAG Chatbot
 
-An AI-powered, institution-agnostic Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate and Postgraduate Prospectuses. Built to dynamically adapt to any university's documentation (e.g., NED, SSUET, etc.) with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **Streamlit glassmorphism frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, **Model2Vec (minishlab/potion-base-8M)** local embeddings, and **Groq LLMs**.
+An AI-powered, institution-agnostic Retrieval-Augmented Generation (RAG) assistant for querying University Undergraduate and Postgraduate Prospectuses. Built to dynamically adapt to any university's documentation (e.g., NED, SSUET, etc.) with a secure **FastAPI backend** (using **Neon serverless Postgres** for role-based access control), a premium **React frontend**, and an asynchronous parallel ingestion pipeline leveraging **LlamaParse**, **Pinecone**, **Model2Vec (minishlab/potion-base-8M)** local embeddings, and **Groq LLMs**.
 
 ---
 
@@ -8,8 +8,8 @@ An AI-powered, institution-agnostic Retrieval-Augmented Generation (RAG) assista
 
 ```mermaid
 graph TD
-    subgraph Client [Streamlit Frontend]
-        UI[Streamlit App]
+    subgraph Client [React Frontend]
+        UI[React App]
     end
 
     subgraph Server [FastAPI Backend API]
@@ -61,9 +61,9 @@ workspace/
 │   ├── api.py           # FastAPI routes, auth middleware, and background workers
 │   ├── database.py      # Neon Postgres connection, schema init, & connection validator
 │   └── schemas.py       # Pydantic validation request/response objects
-├── frontend/
-│   ├── __init__.py
-│   └── app.py           # Streamlit UI client with glassmorphism chat & Admin panels
+├── frontend-react/
+│   ├── src/             # React source code and components
+│   └── package.json     # React UI client with chat & Admin panels
 ├── core/
 │   ├── __init__.py
 │   ├── chatbot.py       # Core RAG querying engine (Groq model + Pinecone lookup)
@@ -137,14 +137,15 @@ Start the backend server on port 8000. It will automatically connect to Neon Pos
 .\venv\Scripts\python.exe -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 2. Start the Streamlit Frontend Client
-Start the Streamlit interface on port 8501:
+### 2. Start the React Frontend Client
+Start the React interface on port 5173 (using Vite):
 ```powershell
-.\venv\Scripts\streamlit.exe run frontend/app.py --server.port 8501
+cd frontend-react
+npm run dev
 ```
 
 ### 3. Log In (Default Admin Credentials)
-Access the UI in your browser at **[http://localhost:8501](http://localhost:8501)** and authenticate with:
+Access the UI in your browser at **[http://localhost:5173](http://localhost:5173)** and authenticate with:
 *   **Username**: `admin`
 *   **Password**: `admin123`
 
